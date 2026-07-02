@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paper to Poster"
+  short_description: "Turn academic PDFs into poster-ready SVGs"
+  default_prompt: "Use $paper-to-poster to convert this academic paper PDF into a poster-ready SVG academic poster."
