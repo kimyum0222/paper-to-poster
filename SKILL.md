@@ -11,15 +11,11 @@ Convert one academic paper PDF into one poster-ready SVG academic poster.
 
 The output should be faithful to the source paper, visually organized as a conference-style research poster, and usable in standard SVG-compatible tools. The required final artifact is `outputs/poster.svg`.
 
-## Use
+## Scope
 
-Use this skill for requests such as:
+After this skill triggers, produce one SVG academic poster from one academic paper PDF. Keep the output grounded in the source paper and prioritize a usable `outputs/poster.svg` over exhaustive extraction.
 
-- Converting a research PDF, manuscript, article, or arXiv paper into an SVG poster.
-- Creating a vector academic poster from a paper.
-- Producing a poster-style visual summary when the final deliverable is SVG.
-
-Do not use this skill for general summaries, literature reviews, peer reviews, slide decks, blog posts, translations, citation formatting, or raster-only image output.
+If the user asks for a non-SVG deliverable after the skill has triggered, explain that this skill produces SVG posters and ask whether to continue with SVG.
 
 ## Inputs
 
@@ -66,6 +62,10 @@ Supporting outputs:
 Prefer making `outputs/poster.svg` self-contained by embedding required images as data URIs. If assets are too large to embed, store them under `outputs/assets/`, reference them with relative paths only, and report that in `outputs/generation_report.md`.
 
 If `outputs/poster.svg` cannot be generated, still create the best available intermediate outputs and explain the blocking issue in `outputs/generation_report.md`.
+
+## Extraction Guidance
+
+Use available local PDF tooling before manual reconstruction. Prefer structured extraction of text, metadata, figures, tables, and captions. If multiple tools are available, compare extracted title, section headings, and figure captions against the PDF before trusting the output.
 
 ## Workflow
 
