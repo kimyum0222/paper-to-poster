@@ -39,7 +39,35 @@ COMMON_SECTION_NAMES = {
 
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 ARXIV_RE = re.compile(r"\barXiv:\s*(?:[a-z\-]+/)?\d{4}\.\d{4,5}(?:v\d+)?", re.IGNORECASE)
-CAPTION_START_RE = re.compile(r"^(fig(?:ure)?\.?\s*\d+|table\s*\d+)\s*[:.\- ]", re.IGNORECASE)
+CAPTION_START_RE = re.compile(r"^(fig(?:ure)?\.?|table)\s*\d+[a-z]?\s*[:.]", re.IGNORECASE)
+AFFILIATION_KEYWORDS = {
+    "university",
+    "institute",
+    "department",
+    "school",
+    "laboratory",
+    "laboratories",
+    "lab",
+    "college",
+    "research",
+    "group",
+    "team",
+    "center",
+    "centre",
+    "company",
+    "google",
+    "microsoft",
+    "openai",
+    "meta",
+}
+NOISY_HEADING_FRAGMENTS = {
+    "published as",
+    "pack of",
+    "ounce",
+    "total results",
+    "back to search",
+    "instruction:",
+}
 
 
 def clean_space(text: str) -> str:
@@ -49,6 +77,46 @@ def clean_space(text: str) -> str:
 
 def clean_lines(text: str) -> list[str]:
     return [clean_space(line) for line in text.splitlines() if clean_space(line)]
+
+
+def compact_alnum(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def normalize_extracted_title(text: str) -> str:
+    """Repair common PDF title extraction artifacts without inventing content."""
+    title = clean_space(text)
+    if not title:
+        return ""
+
+    title = re.sub(r"\s+([:;,])", r"\1", title)
+
+    # Some PDFs expose display-letterspaced titles as "R E A CT" or
+    # "S YNERGIZING". Repair those only when the title has enough single-letter
+    # tokens to suggest letterspacing rather than ordinary prose.
+    single_letter_tokens = re.findall(r"\b[A-Z]\b", title)
+    if len(single_letter_tokens) >= 2:
+        title = re.sub(
+            r"\b((?:[A-Z]\s+){2,}[A-Z]{1,4})\b",
+            lambda match: match.group(1).replace(" ", ""),
+            title,
+        )
+        title = re.sub(r"\b([A-Z])\s+([A-Z]{2,})\b", r"\1\2", title)
+        title = re.sub(r"\s+([:;,])", r"\1", title)
+
+    return clean_space(title)
+
+
+def clean_extracted_page_text(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in clean_lines(text):
+        lowered = line.lower()
+        if re.fullmatch(r"\d{1,4}", line):
+            continue
+        if lowered.startswith("published as "):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
 
 
 def load_optional_pdf_tools() -> tuple[Any | None, Any | None]:
@@ -86,7 +154,7 @@ def looks_like_bad_title(text: str) -> bool:
 
 
 def infer_title_from_metadata(metadata: dict[str, Any]) -> str:
-    title = clean_space(str(metadata.get("title") or ""))
+    title = normalize_extracted_title(str(metadata.get("title") or ""))
     if title and not looks_like_bad_title(title):
         return title
     return ""
@@ -100,7 +168,7 @@ def infer_title_from_first_page_text(first_page_text: str) -> str:
         if line.lower() in COMMON_SECTION_NAMES:
             continue
         if 5 <= len(line) <= 180:
-            return line
+            return normalize_extracted_title(line)
     return ""
 
 
@@ -122,7 +190,7 @@ def infer_title_from_pymupdf_page(page: Any, metadata: dict[str, Any]) -> str:
             spans = line.get("spans", [])
             if not spans:
                 continue
-            text = clean_space(" ".join(str(span.get("text", "")) for span in spans))
+            text = normalize_extracted_title(" ".join(str(span.get("text", "")) for span in spans))
             if not text or looks_like_bad_title(text):
                 continue
             bbox = line.get("bbox", [0, 0, 0, 0])
@@ -143,7 +211,7 @@ def infer_title_from_pymupdf_page(page: Any, metadata: dict[str, Any]) -> str:
         if size >= largest_size * 0.85
     ]
 
-    title = clean_space(" ".join(title_lines[:3]))
+    title = normalize_extracted_title(" ".join(title_lines[:3]))
     if title:
         return title
     return infer_title_from_first_page_text(page.get_text("text"))
@@ -154,6 +222,9 @@ def is_heading_line(line: str) -> bool:
     lowered = stripped.lower()
 
     if not stripped or len(stripped) > 120:
+        return False
+
+    if any(fragment in lowered for fragment in NOISY_HEADING_FRAGMENTS):
         return False
 
     if lowered in COMMON_SECTION_NAMES:
@@ -193,6 +264,17 @@ def extract_sections(full_text: str) -> dict[str, str]:
     return sections
 
 
+def is_affiliation_line(line: str) -> bool:
+    lowered = line.lower()
+    if "@" in line:
+        return True
+    if any(keyword in lowered for keyword in AFFILIATION_KEYWORDS):
+        return True
+    if re.match(r"^\d+\s*[A-Z].*(research|team|group|lab|department|university|institute)", line, re.IGNORECASE):
+        return True
+    return False
+
+
 def find_section_text(sections: dict[str, str], keywords: list[str], max_chars: int = 7000) -> str:
     for heading, body in sections.items():
         heading_l = heading.lower()
@@ -225,7 +307,9 @@ def extract_authors_and_affiliations(first_page_text: str, title: str) -> tuple[
     if title:
         title_first_words = clean_space(title).split()[:5]
         for index, line in enumerate(lines[:30]):
-            if all(word.lower().strip(",.:;") in line.lower() for word in title_first_words[:3]):
+            title_prefix = compact_alnum(" ".join(title_first_words[:3]))
+            line_compact = compact_alnum(line)
+            if title_prefix and title_prefix in line_compact:
                 start_index = index + 1
                 break
 
@@ -234,7 +318,7 @@ def extract_authors_and_affiliations(first_page_text: str, title: str) -> tuple[
         lowered = line.lower()
         if lowered in COMMON_SECTION_NAMES or lowered.startswith("abstract"):
             break
-        if "@" in line or any(word in lowered for word in ["university", "institute", "department", "school", "laboratory", "lab", "college"]):
+        if is_affiliation_line(line):
             affiliations.append(line)
             continue
         if re.search(r"[A-Z][a-z]+\s+[A-Z][a-z]+", line) and len(line) <= 220:
@@ -243,46 +327,75 @@ def extract_authors_and_affiliations(first_page_text: str, title: str) -> tuple[
     return authors[:5], affiliations[:5]
 
 
-def extract_captions(full_text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    lines = clean_lines(full_text)
+def extract_captions_from_pages(
+    pages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     captions: list[dict[str, Any]] = []
     figures_from_captions: list[dict[str, Any]] = []
     tables_from_captions: list[dict[str, Any]] = []
 
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if not CAPTION_START_RE.match(line):
-            index += 1
-            continue
+    for page in pages:
+        page_number = page.get("page_number")
+        lines = clean_lines(str(page.get("text", "")))
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            if not CAPTION_START_RE.match(line):
+                index += 1
+                continue
 
-        caption_parts = [line]
-        lookahead = index + 1
-        while lookahead < len(lines) and len(" ".join(caption_parts)) < 800:
-            next_line = lines[lookahead]
-            if CAPTION_START_RE.match(next_line) or is_heading_line(next_line):
-                break
-            caption_parts.append(next_line)
-            lookahead += 1
+            caption_parts = [line]
+            lookahead = index + 1
+            while lookahead < len(lines) and len(" ".join(caption_parts)) < 500:
+                next_line = lines[lookahead]
+                if CAPTION_START_RE.match(next_line) or is_heading_line(next_line):
+                    break
+                if len(next_line) > 220:
+                    break
+                caption_parts.append(next_line)
+                lookahead += 1
 
-        caption_text = clean_space(" ".join(caption_parts))
-        caption_id = f"caption_{len(captions) + 1}"
-        caption_type = "table" if caption_text.lower().startswith("table") else "figure"
-        caption_record = {
-            "id": caption_id,
-            "type": caption_type,
-            "text": caption_text,
-        }
-        captions.append(caption_record)
+            caption_text = clean_space(" ".join(caption_parts))
+            caption_id = f"caption_{len(captions) + 1}"
+            caption_type = "table" if caption_text.lower().startswith("table") else "figure"
+            caption_record = {
+                "id": caption_id,
+                "type": caption_type,
+                "page": page_number,
+                "text": caption_text,
+            }
+            captions.append(caption_record)
 
-        if caption_type == "figure":
-            figures_from_captions.append({"id": caption_id, "caption": caption_text})
-        else:
-            tables_from_captions.append({"id": caption_id, "caption": caption_text})
+            caption_ref = {"id": caption_id, "page": page_number, "caption": caption_text}
+            if caption_type == "figure":
+                figures_from_captions.append(caption_ref)
+            else:
+                tables_from_captions.append(caption_ref)
 
-        index = lookahead
+            index = max(lookahead, index + 1)
 
     return captions, figures_from_captions, tables_from_captions
+
+
+def attach_captions_to_images(
+    image_records: list[dict[str, Any]],
+    figures_from_captions: list[dict[str, Any]],
+) -> None:
+    used_caption_ids: set[str] = set()
+    for image_record in image_records:
+        page = image_record.get("page")
+        matching_caption = next(
+            (
+                caption
+                for caption in figures_from_captions
+                if caption.get("page") == page and caption.get("id") not in used_caption_ids
+            ),
+            None,
+        )
+        if matching_caption:
+            image_record["caption"] = matching_caption.get("caption", "")
+            image_record["caption_id"] = matching_caption.get("id", "")
+            used_caption_ids.add(str(matching_caption.get("id", "")))
 
 
 def extract_reference_metadata(full_text: str, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -334,7 +447,7 @@ def extract_with_pymupdf(pdf_path: Path, outputs_dir: Path) -> dict[str, Any]:
 
     for page_index, page in enumerate(doc):
         page_number = page_index + 1
-        page_text = page.get_text("text") or ""
+        page_text = clean_extracted_page_text(page.get_text("text") or "")
         pages.append({"page_number": page_number, "text": page_text})
 
         for image_index, image in enumerate(page.get_images(full=True), start=1):
@@ -380,10 +493,9 @@ def extract_with_pymupdf(pdf_path: Path, outputs_dir: Path) -> dict[str, Any]:
 
     full_text = "\n\n".join(page["text"] for page in pages)
     sections = extract_sections(full_text)
-    captions, figures_from_captions, tables_from_captions = extract_captions(full_text)
+    captions, figures_from_captions, tables_from_captions = extract_captions_from_pages(pages)
 
-    for image_record, caption_record in zip(image_records, figures_from_captions):
-        image_record["caption"] = caption_record.get("caption", "")
+    attach_captions_to_images(image_records, figures_from_captions)
 
     first_page_text = pages[0]["text"] if pages else ""
     authors, affiliations = extract_authors_and_affiliations(first_page_text, title)
@@ -448,7 +560,7 @@ def extract_with_pypdf(pdf_path: Path) -> dict[str, Any]:
     pages: list[dict[str, Any]] = []
     for page_index, page in enumerate(reader.pages):
         try:
-            page_text = page.extract_text() or ""
+            page_text = clean_extracted_page_text(page.extract_text() or "")
         except Exception as exc:
             page_text = ""
             notes.append(f"Could not extract text from page {page_index + 1}: {exc}")
@@ -456,7 +568,7 @@ def extract_with_pypdf(pdf_path: Path) -> dict[str, Any]:
 
     full_text = "\n\n".join(page["text"] for page in pages)
     sections = extract_sections(full_text)
-    captions, figures_from_captions, tables_from_captions = extract_captions(full_text)
+    captions, figures_from_captions, tables_from_captions = extract_captions_from_pages(pages)
     first_page_text = pages[0]["text"] if pages else ""
     title = infer_title_from_metadata(metadata) or infer_title_from_first_page_text(first_page_text)
     authors, affiliations = extract_authors_and_affiliations(first_page_text, title)
