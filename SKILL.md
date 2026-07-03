@@ -11,11 +11,28 @@ Convert one academic paper PDF into one poster-ready SVG academic poster.
 
 The output should be faithful to the source paper, visually organized as a conference-style research poster, and usable in standard SVG-compatible tools. The required final artifact is `outputs/poster.svg`.
 
+## Quality Bar
+
+A successful poster should allow a reader to understand within 10 seconds:
+
+- What problem the paper addresses.
+- What the main idea or method is.
+- What the strongest result or contribution is.
+- Why the work matters.
+
+The poster should not attempt to include the whole paper. Prioritize clarity, evidence, and visual hierarchy over completeness.
+
 ## Scope
 
 After this skill triggers, produce one SVG academic poster from one academic paper PDF. Keep the output grounded in the source paper and prioritize a usable `outputs/poster.svg` over exhaustive extraction.
 
 If the user asks for a non-SVG deliverable after the skill has triggered, explain that this skill produces SVG posters and ask whether to continue with SVG.
+
+## Non-Goals
+
+Do not produce literature reviews, slide decks, blog summaries, citation formatting outputs, raster-only posters, or publication-ready redesigned figure sets.
+
+Do not prioritize decorative complexity, full-paper completeness, or unsupported scientific reconstruction over readability and source fidelity.
 
 ## Inputs
 
@@ -63,10 +80,6 @@ Prefer making `outputs/poster.svg` self-contained by embedding required images a
 
 If `outputs/poster.svg` cannot be generated, still create the best available intermediate outputs and explain the blocking issue in `outputs/generation_report.md`.
 
-## Extraction Guidance
-
-Use available local PDF tooling before manual reconstruction. Prefer structured extraction of text, metadata, figures, tables, and captions. If multiple tools are available, compare extracted title, section headings, and figure captions against the PDF before trusting the output.
-
 ## Workflow
 
 1. Locate the user-provided PDF.
@@ -82,6 +95,10 @@ Use available local PDF tooling before manual reconstruction. Prefer structured 
 11. Validate the SVG and referenced assets.
 12. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
 13. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
+
+## Extraction Guidance
+
+Use available local PDF tooling before manual reconstruction. Prefer structured extraction of text, metadata, figures, tables, and captions. If multiple tools are available, compare extracted title, section headings, and figure captions against the PDF before trusting the output.
 
 ## Structured Content
 
@@ -157,6 +174,55 @@ These do not all need separate visual boxes. Combine related sections when space
 
 Omit sections that are not applicable or not verifiable from the paper, and record omissions in `outputs/generation_report.md`.
 
+## Default Layout Plan
+
+When no layout is specified, use this A0 landscape baseline:
+
+- Header: title, authors, affiliations, and optional venue or citation metadata.
+- Column 1: Problem / Motivation, Core Idea / Approach.
+- Column 2: Method, Theoretical Foundation if needed, and the most important method or overview figure.
+- Column 3: Results, Contributions, Conclusion, Limitations.
+- Footer: source paper metadata, extraction notes, omitted-section notes, and asset notes.
+
+Give the Results area visual priority when the paper reports concrete outcomes. Give the Core Idea or Method area visual priority when the paper is primarily conceptual, theoretical, or methodological.
+
+## Content Budget
+
+Unless the user requests otherwise:
+
+- Title: maximum 18 words.
+- Subtitle or venue metadata: maximum 1 line.
+- Each section title: maximum 4 words.
+- Each section: 3-5 bullets.
+- Each bullet: maximum 16 words.
+- Total poster body bullets: 20-32.
+- Prefer 1-3 key figures over many small figures.
+- Results section gets priority over background when space is limited.
+
+## Figure Selection Priority
+
+Prefer figures in this order:
+
+1. Main result figures with reported quantitative outcomes.
+2. Architecture, pipeline, framework, or method overview diagrams.
+3. Qualitative examples directly supporting the paper's claim.
+4. Tables comparing methods, benchmarks, or ablations.
+5. Background or illustrative figures only if space remains.
+
+Avoid figures that are unreadable, purely decorative, duplicated, or not referenced by selected poster claims.
+
+## Overflow Strategy
+
+If content does not fit:
+
+1. Shorten bullets before reducing font size.
+2. Merge related sections.
+3. Drop lower-priority background sections.
+4. Reduce figure count.
+5. Move limitations or metadata to footer.
+6. Use smaller body text only within the allowed typography scale.
+7. Never allow text to overflow panels or canvas.
+
 ## Content Fidelity
 
 Do not invent or visually fabricate scientific evidence.
@@ -212,6 +278,7 @@ Recommended script structure:
 - `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, and basic layout issues.
 
 Scripts should write outputs only under `outputs/` unless the user requests otherwise.
+
 
 ## Validation
 
