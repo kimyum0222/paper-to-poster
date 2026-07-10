@@ -146,6 +146,8 @@ For figure extraction, preserve enough metadata for selection and faithful place
 - `title`
 - `authors`
 - `affiliations`
+- `take_home_message`
+- `result_callouts`
 - `problem`
 - `motivation`
 - `core_idea`
@@ -182,12 +184,16 @@ For figure extraction, preserve enough metadata for selection and faithful place
 `outputs/poster_design_spec.json` should describe the intended poster design before rendering:
 
 - `template`
+- `theme`
+- `hero_message`
+- `callouts`
 - `canvas`
 - `grid`
 - `visual_hierarchy`
 - `typography`
 - `color_palette`
 - `card_style`
+- `card_variants`
 - `image_placement`
 - `section_density`
 - `overflow_rules`

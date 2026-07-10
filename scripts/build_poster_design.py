@@ -39,6 +39,10 @@ def choose_template(content: dict[str, Any]) -> tuple[str, str]:
 
 def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
     template, template_rationale = choose_template(content)
+    result_callouts = content.get("result_callouts", [])
+    if not isinstance(result_callouts, list):
+        result_callouts = []
+    take_home_message = str(content.get("take_home_message", "") or content.get("title", ""))
     if template == "result_centered":
         section_order = [
             "problem",
@@ -91,8 +95,11 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "version": 1,
+        "theme": "modern_academic_evidence",
         "template": template,
         "template_rationale": template_rationale,
+        "hero_message": take_home_message,
+        "callouts": result_callouts[:3],
         "canvas": {
             "width": 1189,
             "height": 841,
@@ -107,8 +114,11 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
         },
         "visual_hierarchy": {
             "main_message": content.get("title", "Untitled Paper"),
+            "take_home_message": take_home_message,
             "section_order": section_order,
             "emphasis": emphasis,
+            "hero_sections": [key for key, value in emphasis.items() if value == "hero"],
+            "callout_sections": ["results"] if result_callouts else [],
             "primary_figure_role": "method_overview",
             "secondary_figure_role": "result_evidence",
         },
@@ -133,6 +143,11 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
             "accent_result": "#c2410c",
             "accent_neutral": "#475569",
             "header_rule": "#9bb5d6",
+            "header_background": "#12233f",
+            "header_text": "#ffffff",
+            "header_muted": "#d7e3f3",
+            "highlight_background": "#fff7ed",
+            "figure_background": "#f8fafc",
         },
         "card_style": {
             "radius": 8,
@@ -140,6 +155,16 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
             "padding_y": 18,
             "accent_bar_width": 6,
             "stroke_width": 1.1,
+            "shadow_opacity": 0.22,
+        },
+        "card_variants": {
+            "problem": "standard",
+            "core_idea": "idea",
+            "method": "standard",
+            "key_figures": "visual",
+            "results": "hero" if result_callouts or template == "result_centered" else "standard",
+            "contribution": "compact",
+            "conclusion": "compact",
         },
         "image_placement": {
             "max_figures": 2,

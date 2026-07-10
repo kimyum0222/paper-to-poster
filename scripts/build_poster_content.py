@@ -115,6 +115,96 @@ def make_bullets(text: str, max_bullets: int, max_words: int = 18) -> list[str]:
     return bullets
 
 
+def sentence_score_for_message(sentence: str) -> int:
+    lowered = sentence.lower()
+    score = 0
+    for keyword, weight in [
+        ("we ", 4),
+        ("this paper", 4),
+        ("propose", 5),
+        ("introduce", 5),
+        ("explore", 4),
+        ("demonstrate", 4),
+        ("show", 3),
+        ("outperform", 5),
+        ("improve", 4),
+        ("success rate", 5),
+        ("achieve", 4),
+        ("contribution", 3),
+    ]:
+        if keyword in lowered:
+            score += weight
+    score += min(len(sentence.split()), 28)
+    return score
+
+
+def make_take_home_message(*sources: str) -> str:
+    sentences: list[str] = []
+    for source in sources:
+        sentences.extend(split_sentences(source))
+    if not sentences:
+        return ""
+    best = max(sentences[:12], key=sentence_score_for_message)
+    return trim_words(best, max_words=28)
+
+
+def label_for_result_sentence(sentence: str) -> str:
+    lowered = sentence.lower()
+    if any(term in lowered for term in ["hotpotqa", "fever", "question answering", "fact verification"]):
+        return "QA / Verification"
+    if any(term in lowered for term in ["alfworld", "webshop", "interactive", "success rate"]):
+        return "Interactive Tasks"
+    if any(term in lowered for term in ["hallucination", "error propagation", "trustworthiness"]):
+        return "Reliability"
+    if any(term in lowered for term in ["benchmark", "baseline", "outperform", "performance"]):
+        return "Benchmark Result"
+    return "Key Evidence"
+
+
+def make_result_callouts(*sources: str, limit: int = 3) -> list[dict[str, str]]:
+    sentences: list[str] = []
+    for source in sources:
+        sentences.extend(split_sentences(source))
+
+    callouts: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if not any(marker in lowered for marker in [
+            "%", "outperform", "success rate", "accuracy", "improve", "achieve",
+            "hotpotqa", "fever", "alfworld", "webshop",
+        ]):
+            continue
+        values = re.findall(r"\b\d+(?:\.\d+)?\s*%", sentence)
+        if values:
+            value = " / ".join(value.replace(" ", "") for value in values[:3])
+        elif any(term in lowered for term in ["hallucination", "error propagation"]):
+            value = "Less Hallucination"
+        elif any(term in lowered for term in ["hotpotqa", "fever"]):
+            value = "QA Evidence"
+        elif any(term in lowered for term in ["alfworld", "webshop"]):
+            value = "Task Evidence"
+        elif re.search(r"\boutperform\w*\b", lowered):
+            value = "Outperforms"
+        elif re.search(r"\bachiev\w*\b", lowered):
+            value = "Reported"
+        else:
+            value = "Validated"
+        key = clean_space(label_for_result_sentence(sentence) + value)
+        if key in seen:
+            continue
+        seen.add(key)
+        callouts.append({
+            "label": label_for_result_sentence(sentence),
+            "value": value,
+            "detail": trim_words(sentence, max_words=18),
+        })
+        if len(callouts) >= limit:
+            break
+
+    return callouts
+
+
 def section_or_empty(data: dict[str, Any], key: str) -> str:
     return clean_source_text(data.get(key, ""))
 
@@ -423,6 +513,8 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
         "title": clean_space(data.get("title", "")) or "Untitled Paper",
         "authors": data.get("authors", []) if isinstance(data.get("authors", []), list) else [],
         "affiliations": data.get("affiliations", []) if isinstance(data.get("affiliations", []), list) else [],
+        "take_home_message": make_take_home_message(abstract, results_source, conclusion_source, intro),
+        "result_callouts": make_result_callouts(results_source, abstract, conclusion_source, limit=3),
         "problem": {
             "heading": "Problem",
             "bullets": make_bullets(problem_source, SECTION_LIMITS["problem"]),
