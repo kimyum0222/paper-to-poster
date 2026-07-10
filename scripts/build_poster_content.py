@@ -27,6 +27,33 @@ FIGURE_KEYWORDS = [
     "结果", "比较", "误差", "分布", "拟合", "诊断", "实验", "试验", "算法",
 ]
 
+METHOD_FIGURE_KEYWORDS = [
+    "framework", "architecture", "pipeline", "overview", "method", "approach",
+    "model", "system", "workflow", "comparison of", "prompting methods",
+    "reason", "act", "react", "algorithm", "示意", "框架", "流程", "方法", "模型",
+]
+
+RESULT_FIGURE_KEYWORDS = [
+    "result", "results", "performance", "accuracy", "success rate", "evaluation",
+    "experiment", "benchmark", "baseline", "baselines", "scaling", "ablation",
+    "hotpotqa", "fever", "alfworld", "webshop", "结果", "性能", "准确率", "对比",
+    "实验", "消融",
+]
+
+CASE_FIGURE_KEYWORDS = [
+    "example", "qualitative", "case", "trajectory", "human-in-the-loop",
+    "failure", "behavior", "示例", "案例", "轨迹",
+]
+
+
+def keyword_score(text: str, keywords: list[str]) -> int:
+    lowered = text.lower()
+    score = 0
+    for index, keyword in enumerate(keywords):
+        if keyword in lowered:
+            score += max(1, len(keywords) - index)
+    return score
+
 
 def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
@@ -172,11 +199,8 @@ def section_text_by_keys(data: dict[str, Any], keys: set[str], min_chars: int = 
 
 def score_figure(record: dict[str, Any]) -> int:
     text = clean_space(record.get("caption", "") or record.get("text", ""))
-    lowered = text.lower()
     score = int(float(record.get("quality_score", 0) or 0))
-    for index, keyword in enumerate(FIGURE_KEYWORDS):
-        if keyword in lowered:
-            score += max(1, len(FIGURE_KEYWORDS) - index)
+    score += keyword_score(text, FIGURE_KEYWORDS)
     if record.get("asset_path"):
         score += 4
     if record.get("width_px", 0) and record.get("height_px", 0):
@@ -185,6 +209,117 @@ def score_figure(record: dict[str, Any]) -> int:
         if width >= 300 and height >= 180:
             score += 2
     return score
+
+
+def figure_number(record: dict[str, Any]) -> int | None:
+    text = clean_space(record.get("caption", "") or record.get("text", ""))
+    match = re.search(r"\b(?:fig(?:ure)?\.?|图)\s*([0-9]+)", text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def readability_score(record: dict[str, Any]) -> float:
+    width = int(record.get("width_px", 0) or 0)
+    height = int(record.get("height_px", 0) or 0)
+    area = float(record.get("area_ratio", 0.0) or 0.0)
+    score = 0.2
+    if width >= 900 and height >= 300:
+        score += 0.35
+    elif width >= 500 and height >= 220:
+        score += 0.25
+    elif width >= 300 and height >= 180:
+        score += 0.15
+    if 0.06 <= area <= 0.45:
+        score += 0.25
+    elif 0.02 <= area <= 0.6:
+        score += 0.15
+    if record.get("caption"):
+        score += 0.15
+    if not record.get("asset_path"):
+        score -= 0.25
+    return round(max(0.0, min(score, 1.0)), 2)
+
+
+def apply_visual_review(record: dict[str, Any], reviews: dict[str, dict[str, Any]]) -> None:
+    review = reviews.get(str(record.get("id", ""))) or reviews.get(str(record.get("caption_id", "")))
+    if not review:
+        return
+    role = clean_space(review.get("role", ""))
+    if role:
+        record["role"] = role
+    for key in ["importance_score", "readability_score"]:
+        if key in review:
+            try:
+                record[key] = round(float(review[key]), 2)
+            except (TypeError, ValueError):
+                pass
+    reason = clean_space(review.get("selection_reason", "") or review.get("reason", ""))
+    if reason:
+        record["selection_reason"] = reason
+    record["selection_source"] = "vision_review"
+
+
+def visual_reviews_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_reviews = data.get("figure_reviews") or data.get("vision_figure_reviews") or []
+    if not isinstance(raw_reviews, list):
+        return {}
+    reviews: dict[str, dict[str, Any]] = {}
+    for review in raw_reviews:
+        if not isinstance(review, dict):
+            continue
+        for key in ["id", "figure_id", "caption_id"]:
+            value = clean_space(review.get(key, ""))
+            if value:
+                reviews[value] = review
+    return reviews
+
+
+def annotate_figure(record: dict[str, Any], reviews: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    item = dict(record)
+    caption = clean_space(item.get("caption", "") or item.get("text", ""))
+    base = score_figure(item)
+    role_scores = {
+        "method_overview": base + keyword_score(caption, METHOD_FIGURE_KEYWORDS),
+        "result_evidence": base + keyword_score(caption, RESULT_FIGURE_KEYWORDS),
+        "qualitative_example": base + keyword_score(caption, CASE_FIGURE_KEYWORDS),
+    }
+
+    # Early figures often introduce the method; later figures are more likely to
+    # carry experimental evidence. Keep this weak so captions still dominate.
+    number = figure_number(item)
+    if number is not None:
+        if number <= 1:
+            role_scores["method_overview"] += 6
+        if number >= 3:
+            role_scores["result_evidence"] += 5
+
+    role = max(role_scores, key=role_scores.get)
+    item["role_scores"] = role_scores
+    item["role"] = role
+    item["importance_score"] = round(max(role_scores.values()) / 40, 2)
+    item["readability_score"] = readability_score(item)
+    item["selection_source"] = "caption_layout_heuristic"
+    item["selection_reason"] = item.get("selection_reason") or f"Selected as {role.replace('_', ' ')} from caption, size, and page context."
+    apply_visual_review(item, reviews)
+    return item
+
+
+def best_by_role(candidates: list[dict[str, Any]], role: str, excluded_ids: set[str]) -> dict[str, Any] | None:
+    pool = [candidate for candidate in candidates if str(candidate.get("id", "")) not in excluded_ids]
+    if not pool:
+        return None
+    return max(
+        pool,
+        key=lambda item: (
+            float(item.get("role_scores", {}).get(role, 0) or 0),
+            float(item.get("importance_score", 0) or 0),
+            float(item.get("readability_score", 0) or 0),
+        ),
+    )
 
 
 def select_figures(data: dict[str, Any], max_figures: int = 2) -> list[dict[str, Any]]:
@@ -201,8 +336,60 @@ def select_figures(data: dict[str, Any], max_figures: int = 2) -> list[dict[str,
         item.setdefault("caption", item.get("text", ""))
         normalized.append(item)
 
-    normalized.sort(key=score_figure, reverse=True)
-    return normalized[:max_figures]
+    reviews = visual_reviews_by_id(data)
+    candidates = [annotate_figure(item, reviews) for item in normalized]
+    if not candidates:
+        return []
+
+    selected: list[dict[str, Any]] = []
+    excluded: set[str] = set()
+    for role in ["method_overview", "result_evidence", "qualitative_example"]:
+        if len(selected) >= max_figures:
+            break
+        candidate = best_by_role(candidates, role, excluded)
+        if not candidate:
+            continue
+        candidate = dict(candidate)
+        candidate["poster_slot"] = "primary" if not selected else "secondary"
+        selected.append(candidate)
+        excluded.add(str(candidate.get("id", "")))
+
+    if len(selected) < max_figures:
+        for candidate in sorted(candidates, key=score_figure, reverse=True):
+            if str(candidate.get("id", "")) in excluded:
+                continue
+            candidate = dict(candidate)
+            candidate["poster_slot"] = "primary" if not selected else "secondary"
+            selected.append(candidate)
+            excluded.add(str(candidate.get("id", "")))
+            if len(selected) >= max_figures:
+                break
+
+    return selected[:max_figures]
+
+
+def figure_candidates(data: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    figures = data.get("figures") or []
+    if not isinstance(figures, list):
+        return []
+    reviews = visual_reviews_by_id(data)
+    candidates = []
+    for index, figure in enumerate(figures):
+        if not isinstance(figure, dict):
+            continue
+        item = dict(figure)
+        item.setdefault("id", f"figure_{index + 1}")
+        item.setdefault("caption", item.get("text", ""))
+        candidates.append(annotate_figure(item, reviews))
+    candidates.sort(
+        key=lambda item: (
+            float(item.get("importance_score", 0) or 0),
+            float(item.get("readability_score", 0) or 0),
+            score_figure(item),
+        ),
+        reverse=True,
+    )
+    return candidates[:limit]
 
 
 def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
@@ -281,6 +468,13 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
             "bullets": make_bullets(section_or_empty(data, "limitations"), SECTION_LIMITS["limitations"]),
         },
         "figures_to_use": select_figures(data, max_figures=2),
+        "figure_candidates": figure_candidates(data, limit=8),
+        "figure_selection_policy": {
+            "strategy": "caption_layout_heuristic_with_optional_vision_review",
+            "roles": ["method_overview", "result_evidence", "qualitative_example"],
+            "vision_review_field": "figure_reviews",
+            "note": "If extracted_paper.json includes figure_reviews, those visual model judgments override heuristic role and scores.",
+        },
         "footer_metadata": {
             "source_pdf": data.get("source_pdf", ""),
             "page_count": data.get("page_count", 0),

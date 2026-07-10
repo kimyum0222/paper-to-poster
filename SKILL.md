@@ -105,10 +105,13 @@ Use available local PDF tooling before manual reconstruction. Prefer structured 
 `outputs/extracted_paper.json` should preserve source material and enough context to support poster claims. Include these fields when available:
 
 - `title`
+- `title_candidates`
+- `title_confidence`
 - `authors`
 - `affiliations`
 - `abstract`
 - `section_headings`
+- `sections`
 - `methods`
 - `results`
 - `conclusion`
@@ -116,7 +119,25 @@ Use available local PDF tooling before manual reconstruction. Prefer structured 
 - `tables`
 - `captions`
 - `references_or_citation_metadata`
+- `text_extraction_quality`
 - `extraction_notes`
+- `pages`
+
+For text extraction, prefer layout-aware records when available:
+
+- `pages[].text` for page-level reading-order text.
+- `pages[].lines` for line text with page number, bounding box, font size, bold flag, reading order, and column hint.
+- `pages[].blocks` for source layout blocks.
+- `sections[]` for structured paper sections with heading, normalized heading, page range, text, line count, and confidence.
+- `text_extraction_quality` for character count, pages with text, detected column mode, section count, missing required sections, title confidence, and likely cover-page/template signals.
+
+For figure extraction, preserve enough metadata for selection and faithful placement:
+
+- `figures[].kind` as `raster_xref`, `page_crop`, or another explicit extraction mode.
+- `figures[].asset_path`, `page`, `bbox`, `width_px`, `height_px`, and `area_ratio`.
+- `figures[].caption`, `caption_id`, `caption_bbox`, and `caption_confidence` when matched.
+- `figures[].quality_score` and `selection_reason` for downstream figure prioritization.
+- When visual model review is available, record figure judgments under `figure_reviews` with `figure_id`, `role`, `importance_score`, `readability_score`, and `selection_reason`; scripts should fall back to caption/layout heuristics when no visual review is available.
 
 `outputs/poster_content.json` should contain concise poster-ready sections. Use these sections when supported by the paper:
 
@@ -135,6 +156,8 @@ Use available local PDF tooling before manual reconstruction. Prefer structured 
 - `significance`
 - `limitations`
 - `figures_to_use`
+- `figure_candidates`
+- `figure_selection_policy`
 - `footer_metadata`
 - `omitted_sections`
 

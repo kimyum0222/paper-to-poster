@@ -172,13 +172,46 @@ def draw_figure_panel(
     w = width
     h = height
     figures = content.get("figures_to_use", [])
-    figure = figures[0] if isinstance(figures, list) and figures else None
+    selected = figures[:2] if isinstance(figures, list) else []
     parts = [
         '<g id="key-figure">',
         f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="10" fill="#ffffff" stroke="#d7dee8" stroke-width="1.2"/>',
-        f'<text class="section-title" x="{x + 18:.1f}" y="{y + 27:.1f}" font-size="18">Key Figure</text>',
+        f'<text class="section-title" x="{x + 18:.1f}" y="{y + 27:.1f}" font-size="18">Key Figures</text>',
     ]
 
+    if selected:
+        gap = 14
+        slot_count = len(selected)
+        slot_h = (h - 58 - gap * (slot_count - 1)) / slot_count
+        for index, figure in enumerate(selected):
+            if not isinstance(figure, dict):
+                continue
+            slot_y = y + 42 + index * (slot_h + gap)
+            slot_id = "primary-figure" if index == 0 else "secondary-figure"
+            role = clean_space(figure.get("role", "")).replace("_", " ").title()
+            title = role or ("Primary Figure" if index == 0 else "Supporting Figure")
+            parts.append(f'<g id="{slot_id}">')
+            parts.append(f'<text class="muted" x="{x + 18:.1f}" y="{slot_y + 10:.1f}" font-size="9">{escape(title)}</text>')
+            parts.append(draw_figure_item(figure, outputs_dir, x + 18, slot_y + 16, w - 36, slot_h - 18))
+            parts.append("</g>")
+    else:
+        parts.append(
+            f'<text class="muted" x="{x + 22:.1f}" y="{y + 65:.1f}" font-size="12">No extracted figure available.</text>'
+        )
+
+    parts.append("</g>")
+    return "\n".join(parts)
+
+
+def draw_figure_item(
+    figure: dict[str, Any],
+    outputs_dir: Path,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> str:
+    parts: list[str] = []
     if isinstance(figure, dict):
         asset = clean_space(figure.get("asset_path", ""))
         caption = clean_space(figure.get("caption", "") or figure.get("text", ""))
@@ -187,46 +220,45 @@ def draw_figure_panel(
             image_data = image_to_data_uri(outputs_dir / asset)
 
         if image_data:
-            img_x = x + 18
-            img_y = y + 42
-            img_w = w - 36
-            img_h = h - 92
+            img_x = x
+            img_y = y
+            img_w = width
+            img_h = max(45.0, height - 31)
             parts.append(
                 f'<image x="{img_x:.1f}" y="{img_y:.1f}" width="{img_w:.1f}" height="{img_h:.1f}" href="{image_data}" preserveAspectRatio="xMidYMid meet"/>'
             )
             cap_svg, _ = svg_text_lines(
                 caption,
-                x + 18,
-                y + h - 35,
-                w - 36,
+                x,
+                y + img_h + 11,
+                width,
                 font_size=8.8,
                 line_height=11,
                 css_class="caption",
-                max_lines=3,
+                max_lines=2,
             )
             parts.append(cap_svg)
         elif caption:
             cap_svg, _ = svg_text_lines(
                 caption,
-                x + 22,
-                y + 58,
-                w - 44,
+                x,
+                y + 13,
+                width,
                 font_size=11,
                 line_height=15,
                 css_class="body",
-                max_lines=9,
+                max_lines=5,
             )
             parts.append(cap_svg)
         else:
             parts.append(
-                f'<text class="muted" x="{x + 22:.1f}" y="{y + 65:.1f}" font-size="12">No usable figure asset was selected.</text>'
+                f'<text class="muted" x="{x:.1f}" y="{y + 18:.1f}" font-size="12">No usable figure asset was selected.</text>'
             )
     else:
         parts.append(
-            f'<text class="muted" x="{x + 22:.1f}" y="{y + 65:.1f}" font-size="12">No extracted figure available.</text>'
+            f'<text class="muted" x="{x:.1f}" y="{y + 18:.1f}" font-size="12">No extracted figure available.</text>'
         )
 
-    parts.append("</g>")
     return "\n".join(parts)
 
 
@@ -268,7 +300,8 @@ def build_layout() -> dict[str, Any]:
             "footer": 8.5,
         },
         "figure_placements": {
-            "primary": "key-figure"
+            "primary": "key-figure/primary-figure",
+            "secondary": "key-figure/secondary-figure",
         },
         "color_tokens": {
             "background": "#f4f7fb",
@@ -282,7 +315,7 @@ def build_layout() -> dict[str, Any]:
         "overflow_handling_decisions": [
             "Bullets are wrapped to fixed line limits.",
             "Extra bullets are dropped after section height is filled.",
-            "Only one key figure is rendered in the MVP layout.",
+            "Up to two selected figures are stacked in the key figure panel.",
         ],
         "asset_embedding_mode": "data_uri_when_available",
     }
