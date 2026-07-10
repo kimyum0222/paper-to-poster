@@ -300,7 +300,7 @@ def annotate_figure(record: dict[str, Any], reviews: dict[str, dict[str, Any]]) 
     role = max(role_scores, key=role_scores.get)
     item["role_scores"] = role_scores
     item["role"] = role
-    item["importance_score"] = round(max(role_scores.values()) / 40, 2)
+    item["importance_score"] = round(max(0.0, min(max(role_scores.values()) / 150, 1.0)), 2)
     item["readability_score"] = readability_score(item)
     item["selection_source"] = "caption_layout_heuristic"
     item["selection_reason"] = item.get("selection_reason") or f"Selected as {role.replace('_', ' ')} from caption, size, and page context."

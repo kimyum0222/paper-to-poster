@@ -296,6 +296,7 @@ This skill can work without scripts, but prefer local scripts when available for
 Recommended script structure:
 
 - `scripts/extract_paper.py`: extract text, metadata, figures, tables, and captions.
+- `scripts/review_figures_with_openai.py`: optionally use an OpenAI vision model to classify figure importance, readability, and poster role.
 - `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
 - `scripts/build_poster_svg.py`: generate `outputs/poster.svg`.
 - `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, and basic layout issues.

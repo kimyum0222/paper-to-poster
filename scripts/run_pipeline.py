@@ -11,7 +11,7 @@ from typing import Any
 
 
 def run_step(command: list[str]) -> dict[str, Any]:
-    print("\n$ " + " ".join(command))
+    print("\n$ " + " ".join(command), flush=True)
     result = subprocess.run(command)
     return {
         "command": command,
@@ -153,6 +153,8 @@ def main() -> int:
     parser.add_argument("pdf_path", help="Path to one academic paper PDF.")
     parser.add_argument("--outputs-dir", default="outputs")
     parser.add_argument("--skip-validate", action="store_true")
+    parser.add_argument("--use-vision-review", action="store_true", help="Use an OpenAI vision model to review figure candidates before content selection.")
+    parser.add_argument("--vision-model", default=None, help="OpenAI vision-capable model for --use-vision-review.")
     args = parser.parse_args()
 
     python = sys.executable
@@ -160,9 +162,27 @@ def main() -> int:
 
     steps = [
         [python, "scripts/extract_paper.py", args.pdf_path, "--outputs-dir", str(outputs_dir)],
-        [python, "scripts/build_poster_content.py", "--input-json", str(outputs_dir / "extracted_paper.json"), "--output-json", str(outputs_dir / "poster_content.json")],
-        [python, "scripts/build_poster_svg.py", "--content-json", str(outputs_dir / "poster_content.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
     ]
+    if args.use_vision_review:
+        review_step = [
+            python,
+            "scripts/review_figures_with_openai.py",
+            "--input-json",
+            str(outputs_dir / "extracted_paper.json"),
+            "--output-json",
+            str(outputs_dir / "extracted_paper.json"),
+            "--outputs-dir",
+            str(outputs_dir),
+        ]
+        if args.vision_model:
+            review_step.extend(["--model", args.vision_model])
+        steps.append(review_step)
+    steps.extend(
+        [
+            [python, "scripts/build_poster_content.py", "--input-json", str(outputs_dir / "extracted_paper.json"), "--output-json", str(outputs_dir / "poster_content.json")],
+            [python, "scripts/build_poster_svg.py", "--content-json", str(outputs_dir / "poster_content.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
+        ]
+    )
 
     if not args.skip_validate and Path("scripts/validate_svg.py").exists():
         steps.append([python, "scripts/validate_svg.py", str(outputs_dir / "poster.svg"), "--outputs-dir", str(outputs_dir), "--layout-json", str(outputs_dir / "poster_layout.json")])
