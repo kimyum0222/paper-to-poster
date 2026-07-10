@@ -24,6 +24,7 @@ FIGURE_KEYWORDS = [
     "result", "performance", "comparison", "experiment", "evaluation", "accuracy",
     "architecture", "framework", "pipeline", "overview", "method", "model",
     "ablation", "qualitative", "example",
+    "结果", "比较", "误差", "分布", "拟合", "诊断", "实验", "试验", "算法",
 ]
 
 
@@ -31,8 +32,29 @@ def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
+def clean_source_text(text: str) -> str:
+    lines = []
+    for raw_line in str(text).splitlines():
+        line = clean_space(raw_line)
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("published as "):
+            continue
+        if re.fullmatch(r"\d{1,3}", line):
+            continue
+        if re.match(r"^\d+\s*(human feedback|work during|project page|projet page)", lowered):
+            continue
+        if lowered.startswith(("project page", "projet page", "∗work during")):
+            continue
+        if re.fullmatch(r"(method|score|sr|act|react|human|expert|all|pick|clean|heat|cool|look|pick 2)", lowered):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def split_sentences(text: str) -> list[str]:
-    text = clean_space(text)
+    text = clean_space(clean_source_text(text))
     if not text:
         return []
     # Simple sentence splitter. Good enough for a first MVP; it avoids requiring
@@ -67,7 +89,7 @@ def make_bullets(text: str, max_bullets: int, max_words: int = 18) -> list[str]:
 
 
 def section_or_empty(data: dict[str, Any], key: str) -> str:
-    return clean_space(data.get(key, ""))
+    return clean_source_text(data.get(key, ""))
 
 
 def first_nonempty(*values: str) -> str:
@@ -76,6 +98,36 @@ def first_nonempty(*values: str) -> str:
         if value:
             return value
     return ""
+
+
+def looks_noisy_for_summary(text: str) -> bool:
+    cleaned = clean_source_text(text)
+    if not cleaned:
+        return True
+    lowered = cleaned.lower()
+    bad_fragments = [
+        "published as a conference paper",
+        "project page",
+        "projet page",
+        "work during google internship",
+        "prompt methoda",
+        "hotpotqa fever",
+        "table ",
+        "figure ",
+        "we thank the support",
+        "human feedback can also be incorporated",
+    ]
+    if any(fragment in lowered for fragment in bad_fragments):
+        return True
+    tokens = cleaned.split()
+    numeric_tokens = [token for token in tokens if re.search(r"\d", token)]
+    if tokens and len(numeric_tokens) / len(tokens) > 0.22:
+        return True
+    return False
+
+
+def clean_or_empty(text: str) -> str:
+    return "" if looks_noisy_for_summary(text) else clean_source_text(text)
 
 
 def find_intro_text(data: dict[str, Any]) -> str:
@@ -90,10 +142,38 @@ def find_intro_text(data: dict[str, Any]) -> str:
     return clean_space(page_text[:5000])
 
 
+def section_text_by_keys(data: dict[str, Any], keys: set[str], min_chars: int = 180) -> str:
+    sections = data.get("sections") or []
+    candidates: list[tuple[int, str]] = []
+    if not isinstance(sections, list):
+        return ""
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        normalized = str(section.get("normalized_heading", ""))
+        heading = clean_space(section.get("heading", ""))
+        text = clean_source_text(section.get("text", ""))
+        if len(text) < min_chars:
+            continue
+        if normalized in keys:
+            priority = 10000
+        elif any(key in heading.lower() for key in keys):
+            priority = 5000
+        else:
+            continue
+        if heading.lower().startswith(("table", "figure")):
+            priority -= 4000
+        candidates.append((priority + len(text), text))
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
 def score_figure(record: dict[str, Any]) -> int:
     text = clean_space(record.get("caption", "") or record.get("text", ""))
     lowered = text.lower()
-    score = 0
+    score = int(float(record.get("quality_score", 0) or 0))
     for index, keyword in enumerate(FIGURE_KEYWORDS):
         if keyword in lowered:
             score += max(1, len(FIGURE_KEYWORDS) - index)
@@ -127,15 +207,24 @@ def select_figures(data: dict[str, Any], max_figures: int = 2) -> list[dict[str,
 
 def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
     abstract = section_or_empty(data, "abstract")
-    intro = find_intro_text(data)
-    methods = section_or_empty(data, "methods")
-    results = section_or_empty(data, "results")
-    conclusion = section_or_empty(data, "conclusion")
+    intro = clean_or_empty(find_intro_text(data))
+    methods = first_nonempty(
+        clean_or_empty(section_text_by_keys(data, {"methods"}, min_chars=180)),
+        clean_or_empty(section_or_empty(data, "methods")),
+    )
+    results = first_nonempty(
+        clean_or_empty(section_text_by_keys(data, {"results"}, min_chars=180)),
+        clean_or_empty(section_or_empty(data, "results")),
+    )
+    conclusion = first_nonempty(
+        clean_or_empty(section_text_by_keys(data, {"conclusion"}, min_chars=120)),
+        clean_or_empty(section_or_empty(data, "conclusion")),
+    )
 
     problem_source = first_nonempty(abstract, intro)
     core_idea_source = first_nonempty(abstract, methods, intro)
     method_source = first_nonempty(methods, abstract)
-    results_source = first_nonempty(results, conclusion)
+    results_source = first_nonempty(results, abstract, conclusion)
     conclusion_source = first_nonempty(conclusion, abstract)
 
     omitted_sections: list[str] = []
