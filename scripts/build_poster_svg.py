@@ -21,9 +21,67 @@ HEADER_H = 105
 FOOTER_H = 34
 COLUMN_W = (CANVAS_W - 2 * MARGIN - 2 * GUTTER) / 3
 
+DEFAULT_COLORS = {
+    "background": "#f4f7fb",
+    "panel": "#ffffff",
+    "panel_stroke": "#d7dee8",
+    "text": "#162033",
+    "muted": "#5b677a",
+    "accent_primary": "#2563eb",
+    "accent_secondary": "#16a34a",
+    "accent_result": "#ea580c",
+    "accent_neutral": "#475569",
+    "header_rule": "#b8c7db",
+}
+
+DEFAULT_TYPOGRAPHY = {
+    "font_family": "Arial, Helvetica, sans-serif",
+    "title": 32,
+    "authors": 13,
+    "section_title": 18,
+    "body": 11.5,
+    "caption": 8.8,
+    "footer": 8.5,
+    "line_height_ratio": 1.3,
+}
+
+DEFAULT_CARD_STYLE = {
+    "radius": 8,
+    "padding_x": 20,
+    "padding_y": 18,
+    "accent_bar_width": 6,
+    "stroke_width": 1.1,
+}
+
 
 def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
+
+
+def deep_get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    value: Any = data
+    for key in keys:
+        if not isinstance(value, dict) or key not in value:
+            return default
+        value = value[key]
+    return value
+
+
+def merged_dict(defaults: dict[str, Any], overrides: Any) -> dict[str, Any]:
+    result = dict(defaults)
+    if isinstance(overrides, dict):
+        result.update(overrides)
+    return result
+
+
+def load_json_or_empty(path: Path | None) -> dict[str, Any]:
+    if not path or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def estimate_text_width(text: str, font_size: float) -> float:
@@ -129,25 +187,38 @@ def draw_panel(
     height: float,
     accent: str = "#2563eb",
     max_bullets: int = 5,
+    typography: dict[str, Any] | None = None,
+    colors: dict[str, Any] | None = None,
+    card_style: dict[str, Any] | None = None,
 ) -> str:
+    typography = merged_dict(DEFAULT_TYPOGRAPHY, typography)
+    colors = merged_dict(DEFAULT_COLORS, colors)
+    card_style = merged_dict(DEFAULT_CARD_STYLE, card_style)
     w = width
     h = height
+    radius = float(card_style.get("radius", 8))
+    padding_x = float(card_style.get("padding_x", 20))
+    accent_w = float(card_style.get("accent_bar_width", 6))
+    stroke_w = float(card_style.get("stroke_width", 1.1))
+    title_size = float(typography.get("section_title", 18))
+    body_size = float(typography.get("body", 11.5))
+    body_line = body_size * float(typography.get("line_height_ratio", 1.3))
     parts = [
         f'<g id="{escape(section_id)}">',
-        f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="10" fill="#ffffff" stroke="#d7dee8" stroke-width="1.2"/>',
-        f'<rect x="{x:.1f}" y="{y:.1f}" width="7" height="{h:.1f}" rx="3" fill="{accent}"/>',
-        f'<text class="section-title" x="{x + 18:.1f}" y="{y + 27:.1f}" font-size="18">{escape(heading)}</text>',
+        f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="{radius:.1f}" fill="{colors["panel"]}" stroke="{colors["panel_stroke"]}" stroke-width="{stroke_w:.1f}"/>',
+        f'<rect x="{x:.1f}" y="{y:.1f}" width="{accent_w:.1f}" height="{h:.1f}" rx="{min(radius, 3):.1f}" fill="{accent}"/>',
+        f'<text class="section-title" x="{x + padding_x:.1f}" y="{y + 27:.1f}" font-size="{title_size:.1f}">{escape(heading)}</text>',
     ]
 
     current_y = y + 50
     for bullet in bullets[:max_bullets]:
         text_svg, current_y = svg_text_lines(
             bullet,
-            x + 22,
+            x + padding_x + 2,
             current_y,
-            w - 38,
-            font_size=11.5,
-            line_height=15,
+            w - padding_x * 2,
+            font_size=body_size,
+            line_height=body_line,
             css_class="body",
             max_lines=3,
             bullet=True,
@@ -168,15 +239,27 @@ def draw_figure_panel(
     y: float,
     width: float,
     height: float,
+    typography: dict[str, Any] | None = None,
+    colors: dict[str, Any] | None = None,
+    card_style: dict[str, Any] | None = None,
+    image_config: dict[str, Any] | None = None,
 ) -> str:
+    typography = merged_dict(DEFAULT_TYPOGRAPHY, typography)
+    colors = merged_dict(DEFAULT_COLORS, colors)
+    card_style = merged_dict(DEFAULT_CARD_STYLE, card_style)
+    image_config = image_config if isinstance(image_config, dict) else {}
     w = width
     h = height
     figures = content.get("figures_to_use", [])
-    selected = figures[:2] if isinstance(figures, list) else []
+    max_figures = int(image_config.get("max_figures", 2) or 2)
+    selected = figures[:max_figures] if isinstance(figures, list) else []
+    radius = float(card_style.get("radius", 8))
+    stroke_w = float(card_style.get("stroke_width", 1.1))
+    title_size = float(typography.get("section_title", 18))
     parts = [
         '<g id="key-figure">',
-        f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="10" fill="#ffffff" stroke="#d7dee8" stroke-width="1.2"/>',
-        f'<text class="section-title" x="{x + 18:.1f}" y="{y + 27:.1f}" font-size="18">Key Figures</text>',
+        f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="{radius:.1f}" fill="{colors["panel"]}" stroke="{colors["panel_stroke"]}" stroke-width="{stroke_w:.1f}"/>',
+        f'<text class="section-title" x="{x + 18:.1f}" y="{y + 27:.1f}" font-size="{title_size:.1f}">Key Figures</text>',
     ]
 
     if selected:
@@ -192,7 +275,7 @@ def draw_figure_panel(
             title = role or ("Primary Figure" if index == 0 else "Supporting Figure")
             parts.append(f'<g id="{slot_id}">')
             parts.append(f'<text class="muted" x="{x + 18:.1f}" y="{slot_y + 10:.1f}" font-size="9">{escape(title)}</text>')
-            parts.append(draw_figure_item(figure, outputs_dir, x + 18, slot_y + 16, w - 36, slot_h - 18))
+            parts.append(draw_figure_item(figure, outputs_dir, x + 18, slot_y + 16, w - 36, slot_h - 18, typography, image_config))
             parts.append("</g>")
     else:
         parts.append(
@@ -210,7 +293,11 @@ def draw_figure_item(
     y: float,
     width: float,
     height: float,
+    typography: dict[str, Any] | None = None,
+    image_config: dict[str, Any] | None = None,
 ) -> str:
+    typography = merged_dict(DEFAULT_TYPOGRAPHY, typography)
+    image_config = image_config if isinstance(image_config, dict) else {}
     parts: list[str] = []
     if isinstance(figure, dict):
         asset = clean_space(figure.get("asset_path", ""))
@@ -223,19 +310,22 @@ def draw_figure_item(
             img_x = x
             img_y = y
             img_w = width
-            img_h = max(45.0, height - 31)
+            caption_lines = int(image_config.get("caption_lines", 2) or 2)
+            caption_size = float(typography.get("caption", 8.8))
+            caption_line = caption_size * float(typography.get("line_height_ratio", 1.3))
+            img_h = max(45.0, height - caption_line * caption_lines - 9)
             parts.append(
-                f'<image x="{img_x:.1f}" y="{img_y:.1f}" width="{img_w:.1f}" height="{img_h:.1f}" href="{image_data}" preserveAspectRatio="xMidYMid meet"/>'
+                f'<image x="{img_x:.1f}" y="{img_y:.1f}" width="{img_w:.1f}" height="{img_h:.1f}" href="{image_data}" preserveAspectRatio="{escape(str(image_config.get("preserve_aspect_ratio", "xMidYMid meet")))}"/>'
             )
             cap_svg, _ = svg_text_lines(
                 caption,
                 x,
                 y + img_h + 11,
                 width,
-                font_size=8.8,
-                line_height=11,
+                font_size=caption_size,
+                line_height=caption_line,
                 css_class="caption",
-                max_lines=2,
+                max_lines=caption_lines,
             )
             parts.append(cap_svg)
         elif caption:
@@ -262,57 +352,129 @@ def draw_figure_item(
     return "\n".join(parts)
 
 
-def build_layout() -> dict[str, Any]:
-    col1_x = MARGIN
-    col2_x = MARGIN + COLUMN_W + GUTTER
-    col3_x = MARGIN + 2 * (COLUMN_W + GUTTER)
-    body_y = HEADER_H + 22
-    body_h = CANVAS_H - body_y - FOOTER_H - 18
+def template_boxes(
+    template: str,
+    margin: float,
+    column_w: float,
+    gutter: float,
+    body_y: float,
+    body_h: float,
+    canvas_w: int,
+    canvas_h: int,
+    footer_h: float,
+    header_h: float,
+) -> dict[str, dict[str, float]]:
+    col1_x = margin
+    col2_x = margin + column_w + gutter
+    col3_x = margin + 2 * (column_w + gutter)
+    footer_box = {"x": margin, "y": canvas_h - footer_h, "width": canvas_w - 2 * margin, "height": footer_h - 8}
+    header_box = {"x": margin, "y": 24, "width": canvas_w - 2 * margin, "height": header_h - 28}
+
+    if template == "result_centered":
+        return {
+            "header": header_box,
+            "problem": {"x": col1_x, "y": body_y, "width": column_w, "height": 168},
+            "core_idea": {"x": col1_x, "y": body_y + 186, "width": column_w, "height": body_h - 186},
+            "method": {"x": col2_x, "y": body_y, "width": column_w, "height": 190},
+            "key-figure": {"x": col2_x, "y": body_y + 208, "width": column_w, "height": body_h - 208},
+            "results": {"x": col3_x, "y": body_y, "width": column_w, "height": 336},
+            "contribution": {"x": col3_x, "y": body_y + 354, "width": column_w, "height": 152},
+            "conclusion": {"x": col3_x, "y": body_y + 524, "width": column_w, "height": body_h - 524},
+            "footer": footer_box,
+        }
+
+    if template == "method_centered":
+        return {
+            "header": header_box,
+            "problem": {"x": col1_x, "y": body_y, "width": column_w, "height": 178},
+            "core_idea": {"x": col1_x, "y": body_y + 196, "width": column_w, "height": body_h - 196},
+            "method": {"x": col2_x, "y": body_y, "width": column_w, "height": 270},
+            "key-figure": {"x": col2_x, "y": body_y + 288, "width": column_w, "height": body_h - 288},
+            "results": {"x": col3_x, "y": body_y, "width": column_w, "height": 238},
+            "contribution": {"x": col3_x, "y": body_y + 256, "width": column_w, "height": 182},
+            "conclusion": {"x": col3_x, "y": body_y + 456, "width": column_w, "height": body_h - 456},
+            "footer": footer_box,
+        }
+
+    if template == "case_study":
+        return {
+            "header": header_box,
+            "problem": {"x": col1_x, "y": body_y, "width": column_w, "height": 158},
+            "core_idea": {"x": col1_x, "y": body_y + 176, "width": column_w, "height": 184},
+            "method": {"x": col1_x, "y": body_y + 378, "width": column_w, "height": body_h - 378},
+            "key-figure": {"x": col2_x, "y": body_y, "width": column_w, "height": body_h},
+            "results": {"x": col3_x, "y": body_y, "width": column_w, "height": 272},
+            "contribution": {"x": col3_x, "y": body_y + 290, "width": column_w, "height": 168},
+            "conclusion": {"x": col3_x, "y": body_y + 476, "width": column_w, "height": body_h - 476},
+            "footer": footer_box,
+        }
+
+    if template == "text_fallback":
+        return {
+            "header": header_box,
+            "problem": {"x": col1_x, "y": body_y, "width": column_w, "height": 190},
+            "core_idea": {"x": col1_x, "y": body_y + 208, "width": column_w, "height": body_h - 208},
+            "method": {"x": col2_x, "y": body_y, "width": column_w, "height": 300},
+            "key-figure": {"x": col2_x, "y": body_y + 318, "width": column_w, "height": body_h - 318},
+            "results": {"x": col3_x, "y": body_y, "width": column_w, "height": 300},
+            "contribution": {"x": col3_x, "y": body_y + 318, "width": column_w, "height": 164},
+            "conclusion": {"x": col3_x, "y": body_y + 500, "width": column_w, "height": body_h - 500},
+            "footer": footer_box,
+        }
+
+    return template_boxes(
+        "method_centered",
+        margin,
+        column_w,
+        gutter,
+        body_y,
+        body_h,
+        canvas_w,
+        canvas_h,
+        footer_h,
+        header_h,
+    )
+
+
+def build_layout(design: dict[str, Any] | None = None) -> dict[str, Any]:
+    design = design or {}
+    canvas_w = int(deep_get(design, "canvas", "width", default=CANVAS_W) or CANVAS_W)
+    canvas_h = int(deep_get(design, "canvas", "height", default=CANVAS_H) or CANVAS_H)
+    margin = float(deep_get(design, "grid", "margin", default=MARGIN) or MARGIN)
+    gutter = float(deep_get(design, "grid", "gutter", default=GUTTER) or GUTTER)
+    header_h = float(deep_get(design, "grid", "header_height", default=HEADER_H) or HEADER_H)
+    footer_h = float(deep_get(design, "grid", "footer_height", default=FOOTER_H) or FOOTER_H)
+    column_w = (canvas_w - 2 * margin - 2 * gutter) / 3
+    col1_x = margin
+    col2_x = margin + column_w + gutter
+    col3_x = margin + 2 * (column_w + gutter)
+    body_y = header_h + 22
+    body_h = canvas_h - body_y - footer_h - 18
+    template = str(design.get("template", "method_centered") or "method_centered")
+    boxes = template_boxes(template, margin, column_w, gutter, body_y, body_h, canvas_w, canvas_h, footer_h, header_h)
 
     layout = {
-        "canvas_width": CANVAS_W,
-        "canvas_height": CANVAS_H,
-        "viewBox": f"0 0 {CANVAS_W} {CANVAS_H}",
+        "canvas_width": canvas_w,
+        "canvas_height": canvas_h,
+        "viewBox": f"0 0 {canvas_w} {canvas_h}",
         "column_count": 3,
-        "margin": MARGIN,
-        "gutter": GUTTER,
-        "section_order": [
+        "margin": margin,
+        "gutter": gutter,
+        "template": template,
+        "template_rationale": design.get("template_rationale", ""),
+        "section_order": deep_get(design, "visual_hierarchy", "section_order", default=[
             "problem", "core_idea", "method", "key-figure",
             "results", "contribution", "conclusion", "footer",
-        ],
-        "section_bounding_boxes": {
-            "header": {"x": MARGIN, "y": 24, "width": CANVAS_W - 2 * MARGIN, "height": HEADER_H - 28},
-            "problem": {"x": col1_x, "y": body_y, "width": COLUMN_W, "height": 174},
-            "core_idea": {"x": col1_x, "y": body_y + 192, "width": COLUMN_W, "height": 210},
-            "method": {"x": col2_x, "y": body_y, "width": COLUMN_W, "height": 226},
-            "key-figure": {"x": col2_x, "y": body_y + 244, "width": COLUMN_W, "height": body_h - 244},
-            "results": {"x": col3_x, "y": body_y, "width": COLUMN_W, "height": 252},
-            "contribution": {"x": col3_x, "y": body_y + 270, "width": COLUMN_W, "height": 168},
-            "conclusion": {"x": col3_x, "y": body_y + 456, "width": COLUMN_W, "height": body_h - 456},
-            "footer": {"x": MARGIN, "y": CANVAS_H - FOOTER_H, "width": CANVAS_W - 2 * MARGIN, "height": FOOTER_H - 8},
-        },
-        "typography_scale": {
-            "title": 32,
-            "authors": 13,
-            "section_title": 18,
-            "body": 11.5,
-            "caption": 8.8,
-            "footer": 8.5,
-        },
+        ]),
+        "section_bounding_boxes": boxes,
+        "typography_scale": merged_dict(DEFAULT_TYPOGRAPHY, design.get("typography")),
         "figure_placements": {
             "primary": "key-figure/primary-figure",
             "secondary": "key-figure/secondary-figure",
         },
-        "color_tokens": {
-            "background": "#f4f7fb",
-            "panel": "#ffffff",
-            "text": "#162033",
-            "muted": "#5b677a",
-            "accent_blue": "#2563eb",
-            "accent_green": "#16a34a",
-            "accent_orange": "#ea580c",
-        },
-        "overflow_handling_decisions": [
+        "color_tokens": merged_dict(DEFAULT_COLORS, design.get("color_palette")),
+        "card_style": merged_dict(DEFAULT_CARD_STYLE, design.get("card_style")),
+        "overflow_handling_decisions": design.get("overflow_rules") or [
             "Bullets are wrapped to fixed line limits.",
             "Extra bullets are dropped after section height is filled.",
             "Up to two selected figures are stacked in the key figure panel.",
@@ -322,9 +484,17 @@ def build_layout() -> dict[str, Any]:
     return layout
 
 
-def build_svg(content: dict[str, Any], outputs_dir: Path) -> tuple[str, dict[str, Any]]:
-    layout = build_layout()
+def build_svg(content: dict[str, Any], outputs_dir: Path, design: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    design = design or {}
+    layout = build_layout(design)
     boxes = layout["section_bounding_boxes"]
+    canvas_w = int(layout["canvas_width"])
+    canvas_h = int(layout["canvas_height"])
+    margin = float(layout["margin"])
+    typography = merged_dict(DEFAULT_TYPOGRAPHY, layout.get("typography_scale"))
+    colors = merged_dict(DEFAULT_COLORS, layout.get("color_tokens"))
+    card_style = merged_dict(DEFAULT_CARD_STYLE, layout.get("card_style"))
+    image_config = design.get("image_placement") if isinstance(design.get("image_placement"), dict) else {}
 
     title = clean_space(content.get("title", "Untitled Paper"))
     authors = content.get("authors", [])
@@ -332,40 +502,51 @@ def build_svg(content: dict[str, Any], outputs_dir: Path) -> tuple[str, dict[str
     authors_text = "; ".join(clean_space(author) for author in authors[:4]) if isinstance(authors, list) else ""
     affiliations_text = "; ".join(clean_space(aff) for aff in affiliations[:2]) if isinstance(affiliations, list) else ""
 
+    font_family = escape(str(typography.get("font_family", DEFAULT_TYPOGRAPHY["font_family"])))
     style = """
     <style>
-      .title { font-family: Arial, Helvetica, sans-serif; font-weight: 700; fill: #162033; }
-      .authors { font-family: Arial, Helvetica, sans-serif; fill: #3b4658; }
-      .section-title { font-family: Arial, Helvetica, sans-serif; font-weight: 700; fill: #162033; }
-      .body { font-family: Arial, Helvetica, sans-serif; fill: #233044; }
-      .caption { font-family: Arial, Helvetica, sans-serif; fill: #5b677a; }
-      .muted { font-family: Arial, Helvetica, sans-serif; fill: #6b7280; }
-      .footer { font-family: Arial, Helvetica, sans-serif; fill: #5b677a; }
+      .title { font-family: FONT_FAMILY; font-weight: 700; fill: TEXT_COLOR; }
+      .authors { font-family: FONT_FAMILY; fill: MUTED_COLOR; }
+      .section-title { font-family: FONT_FAMILY; font-weight: 700; fill: TEXT_COLOR; }
+      .body { font-family: FONT_FAMILY; fill: BODY_COLOR; }
+      .caption { font-family: FONT_FAMILY; fill: MUTED_COLOR; }
+      .muted { font-family: FONT_FAMILY; fill: MUTED_COLOR; }
+      .footer { font-family: FONT_FAMILY; fill: MUTED_COLOR; }
     </style>
     """
+    style = (
+        style.replace("FONT_FAMILY", font_family)
+        .replace("TEXT_COLOR", str(colors["text"]))
+        .replace("BODY_COLOR", str(colors["text"]))
+        .replace("MUTED_COLOR", str(colors["muted"]))
+    )
 
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="1189mm" height="841mm" viewBox="0 0 {CANVAS_W} {CANVAS_H}" role="img">',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="1189mm" height="841mm" viewBox="0 0 {canvas_w} {canvas_h}" role="img">',
         f'<title>{escape(title)}</title>',
-        f'<desc>Academic SVG poster generated from extracted paper content.</desc>',
+        f'<desc>Academic SVG poster generated from extracted paper content using template {escape(str(layout.get("template", "default")))}.</desc>',
         style,
-        f'<rect x="0" y="0" width="{CANVAS_W}" height="{CANVAS_H}" fill="#f4f7fb"/>',
+        f'<rect x="0" y="0" width="{canvas_w}" height="{canvas_h}" fill="{colors["background"]}"/>',
         '<g id="header">',
     ]
 
-    title_lines = wrap_text(title, CANVAS_W - 2 * MARGIN, 32, max_lines=2)
+    title_size = float(typography.get("title", 32))
+    title_line_h = title_size * 1.12
+    title_lines = wrap_text(title, canvas_w - 2 * margin, title_size, max_lines=2)
     title_y = 44
     for i, line in enumerate(title_lines):
-        parts.append(f'<text class="title" x="{MARGIN}" y="{title_y + i * 36}" font-size="32">{escape(line)}</text>')
+        parts.append(f'<text class="title" x="{margin}" y="{title_y + i * title_line_h}" font-size="{title_size:.1f}">{escape(line)}</text>')
 
-    meta_y = title_y + 36 * len(title_lines) + 14
+    meta_y = title_y + title_line_h * len(title_lines) + 14
     if authors_text:
-        author_svg, meta_y = svg_text_lines(authors_text, MARGIN, meta_y, CANVAS_W - 2 * MARGIN, 13, 16, "authors", max_lines=2)
+        author_size = float(typography.get("authors", 13))
+        author_svg, meta_y = svg_text_lines(authors_text, margin, meta_y, canvas_w - 2 * margin, author_size, author_size * 1.24, "authors", max_lines=2)
         parts.append(author_svg)
     if affiliations_text:
-        aff_svg, meta_y = svg_text_lines(affiliations_text, MARGIN, meta_y + 2, CANVAS_W - 2 * MARGIN, 10, 13, "muted", max_lines=1)
+        aff_svg, meta_y = svg_text_lines(affiliations_text, margin, meta_y + 2, canvas_w - 2 * margin, 10, 13, "muted", max_lines=1)
         parts.append(aff_svg)
 
+    parts.append(f'<line x1="{margin}" y1="{boxes["header"]["y"] + boxes["header"]["height"]:.1f}" x2="{canvas_w - margin}" y2="{boxes["header"]["y"] + boxes["header"]["height"]:.1f}" stroke="{colors["header_rule"]}" stroke-width="1.2"/>')
     parts.append("</g>")
 
     problem_box = boxes["problem"]
@@ -377,20 +558,20 @@ def build_svg(content: dict[str, Any], outputs_dir: Path) -> tuple[str, dict[str
     conclusion_box = boxes["conclusion"]
 
     parts.append('<g id="column-1">')
-    parts.append(draw_panel("problem", "Problem / Motivation", section_bullets(content, "problem") + section_bullets(content, "motivation")[:1], **problem_box, accent="#2563eb", max_bullets=4))
-    parts.append(draw_panel("core-idea", "Core Idea", section_bullets(content, "core_idea"), **core_box, accent="#7c3aed", max_bullets=4))
+    parts.append(draw_panel("problem", "Problem / Motivation", section_bullets(content, "problem") + section_bullets(content, "motivation")[:1], **problem_box, accent=str(colors["accent_primary"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style))
+    parts.append(draw_panel("core-idea", "Core Idea", section_bullets(content, "core_idea"), **core_box, accent="#7c3aed", max_bullets=4, typography=typography, colors=colors, card_style=card_style))
     parts.append("</g>")
 
     parts.append('<g id="column-2">')
-    parts.append(draw_panel("method", "Method", section_bullets(content, "method"), **method_box, accent="#16a34a", max_bullets=5))
-    parts.append(draw_figure_panel(content, outputs_dir, **figure_box))
+    parts.append(draw_panel("method", "Method", section_bullets(content, "method"), **method_box, accent=str(colors["accent_secondary"]), max_bullets=5, typography=typography, colors=colors, card_style=card_style))
+    parts.append(draw_figure_panel(content, outputs_dir, **figure_box, typography=typography, colors=colors, card_style=card_style, image_config=image_config))
     parts.append("</g>")
 
     parts.append('<g id="column-3">')
-    parts.append(draw_panel("results", "Results", section_bullets(content, "results"), **results_box, accent="#ea580c", max_bullets=6))
-    parts.append(draw_panel("contribution", "Contributions", section_bullets(content, "contribution"), **contribution_box, accent="#0891b2", max_bullets=4))
+    parts.append(draw_panel("results", "Results", section_bullets(content, "results"), **results_box, accent=str(colors["accent_result"]), max_bullets=6, typography=typography, colors=colors, card_style=card_style))
+    parts.append(draw_panel("contribution", "Contributions", section_bullets(content, "contribution"), **contribution_box, accent="#0891b2", max_bullets=4, typography=typography, colors=colors, card_style=card_style))
     conclusion_bullets = section_bullets(content, "conclusion") + section_bullets(content, "limitations")[:1]
-    parts.append(draw_panel("conclusion", "Conclusion", conclusion_bullets, **conclusion_box, accent="#475569", max_bullets=4))
+    parts.append(draw_panel("conclusion", "Conclusion", conclusion_bullets, **conclusion_box, accent=str(colors["accent_neutral"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style))
     parts.append("</g>")
 
     footer = content.get("footer_metadata", {}) if isinstance(content.get("footer_metadata", {}), dict) else {}
@@ -400,7 +581,8 @@ def build_svg(content: dict[str, Any], outputs_dir: Path) -> tuple[str, dict[str
         footer_text += " | Omitted or weak sections: " + ", ".join(str(item) for item in omitted[:6])
 
     parts.append('<g id="footer">')
-    footer_svg, _ = svg_text_lines(footer_text, MARGIN, CANVAS_H - 18, CANVAS_W - 2 * MARGIN, 8.5, 11, "footer", max_lines=2)
+    footer_size = float(typography.get("footer", 8.5))
+    footer_svg, _ = svg_text_lines(footer_text, margin, canvas_h - 18, canvas_w - 2 * margin, footer_size, footer_size * 1.3, "footer", max_lines=2)
     parts.append(footer_svg)
     parts.append("</g>")
 
@@ -412,12 +594,14 @@ def build_svg(content: dict[str, Any], outputs_dir: Path) -> tuple[str, dict[str
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate outputs/poster.svg from poster_content.json.")
     parser.add_argument("--content-json", default="outputs/poster_content.json")
+    parser.add_argument("--design-json", default="outputs/poster_design_spec.json")
     parser.add_argument("--outputs-dir", default="outputs")
     parser.add_argument("--svg-path", default="outputs/poster.svg")
     parser.add_argument("--layout-json", default="outputs/poster_layout.json")
     args = parser.parse_args()
 
     content_json = Path(args.content_json)
+    design_json = Path(args.design_json)
     outputs_dir = Path(args.outputs_dir)
     svg_path = Path(args.svg_path)
     layout_json = Path(args.layout_json)
@@ -427,7 +611,8 @@ def main() -> int:
         return 1
 
     content = json.loads(content_json.read_text(encoding="utf-8"))
-    svg, layout = build_svg(content, outputs_dir)
+    design = load_json_or_empty(design_json)
+    svg, layout = build_svg(content, outputs_dir, design)
 
     svg_path.parent.mkdir(parents=True, exist_ok=True)
     svg_path.write_text(svg, encoding="utf-8")

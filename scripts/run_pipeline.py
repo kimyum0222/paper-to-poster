@@ -43,6 +43,7 @@ def write_generation_report(
         "poster.svg",
         "extracted_paper.json",
         "poster_content.json",
+        "poster_design_spec.json",
         "poster_layout.json",
     ]
     existing_files = [name for name in generated_files if (outputs_dir / name).exists()]
@@ -105,6 +106,8 @@ def write_generation_report(
         "",
         "## Layout And Assets",
         "",
+        f"- Template: {layout.get('template', 'unknown')}",
+        f"- Template rationale: {layout.get('template_rationale', '') or 'not recorded'}",
         f"- Canvas: {layout.get('canvas_width', 1189)} x {layout.get('canvas_height', 841)}",
         f"- Asset embedding mode: {layout.get('asset_embedding_mode', 'unknown')}",
         "- SVG images are embedded as data URIs when local assets can be read.",
@@ -180,7 +183,8 @@ def main() -> int:
     steps.extend(
         [
             [python, "scripts/build_poster_content.py", "--input-json", str(outputs_dir / "extracted_paper.json"), "--output-json", str(outputs_dir / "poster_content.json")],
-            [python, "scripts/build_poster_svg.py", "--content-json", str(outputs_dir / "poster_content.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
+            [python, "scripts/build_poster_design.py", "--content-json", str(outputs_dir / "poster_content.json"), "--output-json", str(outputs_dir / "poster_design_spec.json")],
+            [python, "scripts/build_poster_svg.py", "--content-json", str(outputs_dir / "poster_content.json"), "--design-json", str(outputs_dir / "poster_design_spec.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
         ]
     )
 

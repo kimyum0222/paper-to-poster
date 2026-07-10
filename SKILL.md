@@ -72,6 +72,7 @@ Supporting outputs:
 
 - `outputs/extracted_paper.json`
 - `outputs/poster_content.json`
+- `outputs/poster_design_spec.json`
 - `outputs/poster_layout.json`
 - `outputs/generation_report.md`
 - `outputs/assets/` for extracted figures, tables, diagrams, icons, or intermediate local assets.
@@ -89,12 +90,13 @@ If `outputs/poster.svg` cannot be generated, still create the best available int
 5. Convert the extracted material into concise poster sections.
 6. Select the highest-value figures, tables, diagrams, result plots, or qualitative examples.
 7. Save poster content as `outputs/poster_content.json`.
-8. Plan the canvas, grid, section order, typography, figure placement, color tokens, and overflow handling.
-9. Save layout decisions as `outputs/poster_layout.json`.
-10. Generate `outputs/poster.svg` using direct SVG markup or a local SVG-generation script.
-11. Validate the SVG and referenced assets.
-12. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
-13. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
+8. Build a structured design spec for information hierarchy, template choice, canvas, grid, typography, palette, figure placement, density, and overflow rules.
+9. Save design decisions as `outputs/poster_design_spec.json`.
+10. Generate `outputs/poster.svg` from the design spec and content using a deterministic SVG renderer.
+11. Save realized layout decisions as `outputs/poster_layout.json`.
+12. Validate the SVG and referenced assets.
+13. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
+14. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
 
 ## Extraction Guidance
 
@@ -176,6 +178,19 @@ For figure extraction, preserve enough metadata for selection and faithful place
 - `color_tokens`
 - `overflow_handling_decisions`
 - `asset_embedding_mode`
+
+`outputs/poster_design_spec.json` should describe the intended poster design before rendering:
+
+- `template`
+- `canvas`
+- `grid`
+- `visual_hierarchy`
+- `typography`
+- `color_palette`
+- `card_style`
+- `image_placement`
+- `section_density`
+- `overflow_rules`
 
 ## Poster Structure
 
@@ -298,7 +313,8 @@ Recommended script structure:
 - `scripts/extract_paper.py`: extract text, metadata, figures, tables, and captions.
 - `scripts/review_figures_with_openai.py`: optionally use an OpenAI vision model to classify figure importance, readability, and poster role.
 - `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
-- `scripts/build_poster_svg.py`: generate `outputs/poster.svg`.
+- `scripts/build_poster_design.py`: build `outputs/poster_design_spec.json` with template, hierarchy, grid, typography, palette, density, and overflow parameters.
+- `scripts/build_poster_svg.py`: generate `outputs/poster.svg` from poster content and design spec.
 - `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, and basic layout issues.
 
 Scripts should write outputs only under `outputs/` unless the user requests otherwise.
