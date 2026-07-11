@@ -195,6 +195,7 @@ Each poster claim, bullet, and callout should preserve source evidence when avai
 - `gutter`
 - `section_order`
 - `section_bounding_boxes`
+- `component_bounding_boxes`
 - `typography_scale`
 - `figure_placements`
 - `color_tokens`
@@ -360,6 +361,7 @@ Before finishing, confirm or report:
 - Referenced local assets exist under `outputs/assets/`.
 - Major sections do not overlap, overflow, or fall off the canvas.
 - Poster text lines stay inside their assigned section bounding boxes, with any estimated overflow reported in `outputs/poster_overflow_report.json`.
+- Text inside nested components such as result callout boxes should stay inside `component_bounding_boxes`, not just inside the larger parent section.
 - When semantic review is enabled, poster claims are reviewed against extracted source evidence and reported in `outputs/poster_faithfulness_report.json`.
 - Figures, tables, captions, and claims remain faithful to the paper.
 - Omitted or unavailable sections are reported in `outputs/generation_report.md`.

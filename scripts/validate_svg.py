@@ -132,22 +132,35 @@ def load_layout_boxes(layout_path: Path) -> tuple[dict[str, tuple[float, float, 
         return boxes, errors, warnings
 
     boxes_raw = layout.get("section_bounding_boxes")
-    if not boxes_raw:
-        warnings.append("Layout JSON is missing section_bounding_boxes.")
+    component_boxes_raw = layout.get("component_bounding_boxes")
+    if not boxes_raw and not component_boxes_raw:
+        warnings.append("Layout JSON is missing section_bounding_boxes and component_bounding_boxes.")
         return boxes, errors, warnings
 
+    items: list[tuple[str, Any]] = []
     if isinstance(boxes_raw, dict):
-        items = list(boxes_raw.items())
+        items.extend(list(boxes_raw.items()))
     elif isinstance(boxes_raw, list):
-        items = [
+        items.extend([
             (str(item.get("id", index)), item.get("box", item))
             if isinstance(item, dict)
             else (str(index), item)
             for index, item in enumerate(boxes_raw)
-        ]
-    else:
+        ])
+    elif boxes_raw:
         warnings.append("section_bounding_boxes should be a dict or list.")
-        return boxes, errors, warnings
+
+    if isinstance(component_boxes_raw, dict):
+        items.extend(list(component_boxes_raw.items()))
+    elif isinstance(component_boxes_raw, list):
+        items.extend([
+            (str(item.get("id", index)), item.get("box", item))
+            if isinstance(item, dict)
+            else (str(index), item)
+            for index, item in enumerate(component_boxes_raw)
+        ])
+    elif component_boxes_raw:
+        warnings.append("component_bounding_boxes should be a dict or list.")
 
     for name, raw_box in items:
         try:

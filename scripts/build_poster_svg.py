@@ -298,11 +298,14 @@ def draw_result_callouts(
         label = clean_space(item.get("label", "Evidence"))
         value = clean_space(item.get("value", ""))
         detail = clean_space(item.get("detail", ""))
+        value_size = min(18.0, max(7.4, (box_w - 24) / max(1, len(value)) / 0.52))
+        label_size = min(8.5, max(6.2, (box_w - 24) / max(1, len(label.upper())) / 0.52))
         parts.append(
+            f'<g id="result-callout-{index + 1}">'
             f'<rect x="{box_x:.1f}" y="{y:.1f}" width="{box_w:.1f}" height="74" rx="7" fill="{colors["highlight_background"]}" stroke="{colors["accent_result"]}" stroke-opacity="0.28"/>'
         )
-        parts.append(f'<text class="callout-label" x="{box_x + 10:.1f}" y="{y + 17:.1f}" font-size="8.5">{escape(label.upper())}</text>')
-        parts.append(f'<text class="callout-value" x="{box_x + 10:.1f}" y="{y + 40:.1f}" font-size="18">{escape(value)}</text>')
+        parts.append(f'<text class="callout-label" x="{box_x + 10:.1f}" y="{y + 17:.1f}" font-size="{label_size:.1f}">{escape(label.upper())}</text>')
+        parts.append(f'<text class="callout-value" x="{box_x + 10:.1f}" y="{y + 40:.1f}" font-size="{value_size:.1f}">{escape(value)}</text>')
         detail_svg, _ = svg_text_lines(
             detail,
             box_x + 10,
@@ -314,6 +317,7 @@ def draw_result_callouts(
             max_lines=2,
         )
         parts.append(detail_svg)
+        parts.append("</g>")
 
     return "\n".join(parts), y + 86
 
@@ -607,6 +611,37 @@ def template_boxes(
     )
 
 
+def build_component_boxes(
+    boxes: dict[str, dict[str, float]],
+    design: dict[str, Any],
+    card_style: dict[str, Any],
+) -> dict[str, dict[str, float]]:
+    component_boxes: dict[str, dict[str, float]] = {}
+    results_box = boxes.get("results")
+    callouts = design.get("callouts")
+    if not results_box or not isinstance(callouts, list):
+        return component_boxes
+
+    valid_count = min(3, len([item for item in callouts if isinstance(item, dict)]))
+    if not valid_count:
+        return component_boxes
+
+    padding_x = float(card_style.get("padding_x", 20))
+    x = float(results_box["x"]) + padding_x
+    y = float(results_box["y"]) + 69
+    width = float(results_box["width"]) - padding_x * 2
+    gap = 8
+    box_w = (width - gap * (valid_count - 1)) / valid_count
+    for index in range(valid_count):
+        component_boxes[f"result-callout-{index + 1}"] = {
+            "x": x + index * (box_w + gap),
+            "y": y,
+            "width": box_w,
+            "height": 74,
+        }
+    return component_boxes
+
+
 def build_layout(design: dict[str, Any] | None = None) -> dict[str, Any]:
     design = design or {}
     canvas_w = int(deep_get(design, "canvas", "width", default=CANVAS_W) or CANVAS_W)
@@ -623,6 +658,9 @@ def build_layout(design: dict[str, Any] | None = None) -> dict[str, Any]:
     body_h = canvas_h - body_y - footer_h - 18
     template = str(design.get("template", "method_centered") or "method_centered")
     boxes = template_boxes(template, margin, column_w, gutter, body_y, body_h, canvas_w, canvas_h, footer_h, header_h)
+    typography = merged_dict(DEFAULT_TYPOGRAPHY, design.get("typography"))
+    card_style = merged_dict(DEFAULT_CARD_STYLE, design.get("card_style"))
+    component_boxes = build_component_boxes(boxes, design, card_style)
 
     layout = {
         "canvas_width": canvas_w,
@@ -638,13 +676,14 @@ def build_layout(design: dict[str, Any] | None = None) -> dict[str, Any]:
             "results", "contribution", "conclusion", "footer",
         ]),
         "section_bounding_boxes": boxes,
-        "typography_scale": merged_dict(DEFAULT_TYPOGRAPHY, design.get("typography")),
+        "component_bounding_boxes": component_boxes,
+        "typography_scale": typography,
         "figure_placements": {
             "primary": "key-figure/primary-figure",
             "secondary": "key-figure/secondary-figure",
         },
         "color_tokens": merged_dict(DEFAULT_COLORS, design.get("color_palette")),
-        "card_style": merged_dict(DEFAULT_CARD_STYLE, design.get("card_style")),
+        "card_style": card_style,
         "overflow_handling_decisions": design.get("overflow_rules") or [
             "Bullets are wrapped to fixed line limits.",
             "Extra bullets are dropped after section height is filled.",
