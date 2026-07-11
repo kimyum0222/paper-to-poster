@@ -75,7 +75,9 @@ Supporting outputs:
 - `outputs/poster_design_spec.json`
 - `outputs/poster_layout.json`
 - `outputs/poster_overflow_report.json`
+- `outputs/layout_repair_report.json` when deterministic overflow repair runs.
 - `outputs/poster_faithfulness_report.json` when semantic claim review is enabled.
+- `outputs/poster_aesthetic_report.json` when layout JSON aesthetic review is enabled.
 - `outputs/generation_report.md`
 - `outputs/assets/` for extracted figures, tables, diagrams, icons, or intermediate local assets.
 
@@ -98,8 +100,9 @@ If `outputs/poster.svg` cannot be generated, still create the best available int
 11. Generate `outputs/poster.svg` from the design spec and content using a deterministic SVG renderer.
 12. Save realized layout decisions as `outputs/poster_layout.json`.
 13. Validate the SVG, referenced assets, layout boxes, and text overflow.
-14. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
-15. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
+14. Repair overflow deterministically when validation reports overflowing text, then re-render and re-validate for a bounded number of iterations.
+15. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
+16. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
 
 ## Extraction Guidance
 
@@ -341,8 +344,10 @@ Recommended script structure:
 - `scripts/review_figures_with_openai.py`: optionally use an OpenAI vision model to classify figure importance, readability, and poster role.
 - `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
 - `scripts/review_poster_faithfulness_with_openai.py`: optionally use an OpenAI text model to check poster claims against source evidence.
+- `scripts/review_poster_aesthetics_with_openai.py`: optionally use an OpenAI text model to review layout aesthetics from structured JSON.
 - `scripts/build_poster_design.py`: build `outputs/poster_design_spec.json` with template, hierarchy, grid, typography, palette, density, and overflow parameters.
 - `scripts/build_poster_svg.py`: generate `outputs/poster.svg` from poster content and design spec.
+- `scripts/repair_poster_layout.py`: deterministically adjust design parameters after overflow validation and before re-rendering.
 - `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, basic layout issues, and estimated text overflow per block.
 
 Scripts should write outputs only under `outputs/` unless the user requests otherwise.

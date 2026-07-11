@@ -40,6 +40,8 @@ def write_generation_report(
     layout = read_json(outputs_dir / "poster_layout.json")
     overflow_report = read_json(outputs_dir / "poster_overflow_report.json")
     faithfulness_report = read_json(outputs_dir / "poster_faithfulness_report.json")
+    repair_report = read_json(outputs_dir / "layout_repair_report.json")
+    aesthetic_report = read_json(outputs_dir / "poster_aesthetic_report.json")
 
     generated_files = [
         "poster.svg",
@@ -49,6 +51,8 @@ def write_generation_report(
         "poster_layout.json",
         "poster_overflow_report.json",
         "poster_faithfulness_report.json",
+        "layout_repair_report.json",
+        "poster_aesthetic_report.json",
     ]
     existing_files = [name for name in generated_files if (outputs_dir / name).exists()]
     if (outputs_dir / "assets").exists():
@@ -129,6 +133,14 @@ def write_generation_report(
         report.append(f"- Faithfulness claims reviewed: {faithfulness_report.get('review_count', 0)}")
         report.append(f"- High-risk claim count: {faithfulness_report.get('high_risk_count', 0)}")
         report.append(f"- Medium-risk claim count: {faithfulness_report.get('medium_risk_count', 0)}")
+    if repair_report:
+        report.append(f"- Layout repair: {repair_report.get('status', 'unknown')}")
+        report.append(f"- Layout repair iteration: {repair_report.get('iteration', 0)}")
+        report.append(f"- Layout repair actions: {len(repair_report.get('actions', []) or [])}")
+    if aesthetic_report:
+        report.append(f"- Aesthetic review: {aesthetic_report.get('status', 'unknown')}")
+        report.append(f"- Aesthetic high-risk issues: {aesthetic_report.get('high_risk_count', 0)}")
+        report.append(f"- Aesthetic medium-risk issues: {aesthetic_report.get('medium_risk_count', 0)}")
     if failed_step:
         report.append(f"- Failed step: `{' '.join(failed_step)}`")
 
@@ -173,6 +185,9 @@ def main() -> int:
     parser.add_argument("--vision-model", default=None, help="OpenAI vision-capable model for --use-vision-review.")
     parser.add_argument("--use-faithfulness-review", action="store_true", help="Use an OpenAI text model to review poster claims against source evidence.")
     parser.add_argument("--faithfulness-model", default=None, help="OpenAI model for --use-faithfulness-review.")
+    parser.add_argument("--max-repair-iterations", type=int, default=2, help="Maximum deterministic layout repair attempts after overflow validation.")
+    parser.add_argument("--use-aesthetic-review", action="store_true", help="Use an OpenAI text model to review layout aesthetics from JSON after validation/repair.")
+    parser.add_argument("--aesthetic-model", default=None, help="OpenAI model for --use-aesthetic-review.")
     args = parser.parse_args()
 
     python = sys.executable
@@ -241,6 +256,82 @@ def main() -> int:
         code = int(result["returncode"])
         if code != 0:
             write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=step)
+            print(f"Step failed with exit code {code}.", file=sys.stderr)
+            return code
+
+    if not args.skip_validate and args.max_repair_iterations > 0:
+        for iteration in range(1, args.max_repair_iterations + 1):
+            overflow = read_json(outputs_dir / "poster_overflow_report.json")
+            if overflow.get("status") == "passed":
+                break
+            repair_step = [
+                python,
+                "scripts/repair_poster_layout.py",
+                "--design-json",
+                str(outputs_dir / "poster_design_spec.json"),
+                "--overflow-json",
+                str(outputs_dir / "poster_overflow_report.json"),
+                "--repair-report",
+                str(outputs_dir / "layout_repair_report.json"),
+                "--iteration",
+                str(iteration),
+            ]
+            rerender_step = [
+                python,
+                "scripts/build_poster_svg.py",
+                "--content-json",
+                str(outputs_dir / "poster_content.json"),
+                "--design-json",
+                str(outputs_dir / "poster_design_spec.json"),
+                "--outputs-dir",
+                str(outputs_dir),
+                "--svg-path",
+                str(outputs_dir / "poster.svg"),
+                "--layout-json",
+                str(outputs_dir / "poster_layout.json"),
+            ]
+            revalidate_step = [
+                python,
+                "scripts/validate_svg.py",
+                str(outputs_dir / "poster.svg"),
+                "--outputs-dir",
+                str(outputs_dir),
+                "--layout-json",
+                str(outputs_dir / "poster_layout.json"),
+                "--overflow-report",
+                str(outputs_dir / "poster_overflow_report.json"),
+            ]
+            for step in [repair_step, rerender_step, revalidate_step]:
+                result = run_step(step)
+                step_results.append(result)
+                code = int(result["returncode"])
+                if code != 0:
+                    write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=step)
+                    print(f"Step failed with exit code {code}.", file=sys.stderr)
+                    return code
+
+    if args.use_aesthetic_review:
+        aesthetic_step = [
+            python,
+            "scripts/review_poster_aesthetics_with_openai.py",
+            "--content-json",
+            str(outputs_dir / "poster_content.json"),
+            "--design-json",
+            str(outputs_dir / "poster_design_spec.json"),
+            "--layout-json",
+            str(outputs_dir / "poster_layout.json"),
+            "--overflow-json",
+            str(outputs_dir / "poster_overflow_report.json"),
+            "--output-json",
+            str(outputs_dir / "poster_aesthetic_report.json"),
+        ]
+        if args.aesthetic_model:
+            aesthetic_step.extend(["--model", args.aesthetic_model])
+        result = run_step(aesthetic_step)
+        step_results.append(result)
+        code = int(result["returncode"])
+        if code != 0:
+            write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=aesthetic_step)
             print(f"Step failed with exit code {code}.", file=sys.stderr)
             return code
 

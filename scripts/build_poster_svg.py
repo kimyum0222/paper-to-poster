@@ -285,10 +285,20 @@ def draw_result_callouts(
     width: float,
     colors: dict[str, Any],
     typography: dict[str, Any],
+    callout_style: dict[str, Any] | None = None,
 ) -> tuple[str, float]:
     valid = [item for item in callouts if isinstance(item, dict)][:3]
     if not valid:
         return "", y
+
+    callout_style = callout_style if isinstance(callout_style, dict) else {}
+    callout_h = float(callout_style.get("height", 74) or 74)
+    value_min_size = float(callout_style.get("value_min_font_size", 7.4) or 7.4)
+    value_max_size = float(callout_style.get("value_max_font_size", 18.0) or 18.0)
+    label_min_size = float(callout_style.get("label_min_font_size", 6.2) or 6.2)
+    label_max_size = float(callout_style.get("label_max_font_size", 8.5) or 8.5)
+    detail_scale = float(callout_style.get("detail_font_scale", 1.0) or 1.0)
+    detail_lines = int(callout_style.get("detail_lines", 2) or 2)
 
     gap = 8
     box_w = (width - gap * (len(valid) - 1)) / len(valid)
@@ -298,11 +308,12 @@ def draw_result_callouts(
         label = clean_space(item.get("label", "Evidence"))
         value = clean_space(item.get("value", ""))
         detail = clean_space(item.get("detail", ""))
-        value_size = min(18.0, max(7.4, (box_w - 24) / max(1, len(value)) / 0.52))
-        label_size = min(8.5, max(6.2, (box_w - 24) / max(1, len(label.upper())) / 0.52))
+        value_size = min(value_max_size, max(value_min_size, (box_w - 24) / max(1, len(value)) / 0.52))
+        label_size = min(label_max_size, max(label_min_size, (box_w - 24) / max(1, len(label.upper())) / 0.52))
+        detail_size = float(typography.get("caption", 8.2)) * detail_scale
         parts.append(
             f'<g id="result-callout-{index + 1}">'
-            f'<rect x="{box_x:.1f}" y="{y:.1f}" width="{box_w:.1f}" height="74" rx="7" fill="{colors["highlight_background"]}" stroke="{colors["accent_result"]}" stroke-opacity="0.28"/>'
+            f'<rect x="{box_x:.1f}" y="{y:.1f}" width="{box_w:.1f}" height="{callout_h:.1f}" rx="7" fill="{colors["highlight_background"]}" stroke="{colors["accent_result"]}" stroke-opacity="0.28"/>'
         )
         parts.append(f'<text class="callout-label" x="{box_x + 10:.1f}" y="{y + 17:.1f}" font-size="{label_size:.1f}">{escape(label.upper())}</text>')
         parts.append(f'<text class="callout-value" x="{box_x + 10:.1f}" y="{y + 40:.1f}" font-size="{value_size:.1f}">{escape(value)}</text>')
@@ -311,15 +322,15 @@ def draw_result_callouts(
             box_x + 10,
             y + 57,
             box_w - 20,
-            float(typography.get("caption", 8.2)),
-            10.5,
+            detail_size,
+            detail_size * 1.28,
             "caption",
-            max_lines=2,
+            max_lines=detail_lines,
         )
         parts.append(detail_svg)
         parts.append("</g>")
 
-    return "\n".join(parts), y + 86
+    return "\n".join(parts), y + callout_h + 12
 
 
 def draw_panel(
@@ -337,6 +348,7 @@ def draw_panel(
     card_style: dict[str, Any] | None = None,
     variant: str = "standard",
     callouts: list[dict[str, Any]] | None = None,
+    callout_style: dict[str, Any] | None = None,
 ) -> str:
     typography = merged_dict(DEFAULT_TYPOGRAPHY, typography)
     colors = merged_dict(DEFAULT_COLORS, colors)
@@ -365,7 +377,7 @@ def draw_panel(
         )
         current_y = title_y + 34
         if callouts:
-            callout_svg, current_y = draw_result_callouts(callouts, x + padding_x, current_y, w - padding_x * 2, colors, typography)
+            callout_svg, current_y = draw_result_callouts(callouts, x + padding_x, current_y, w - padding_x * 2, colors, typography, callout_style)
             parts.append(callout_svg)
     else:
         parts.append(
@@ -626,6 +638,8 @@ def build_component_boxes(
     if not valid_count:
         return component_boxes
 
+    callout_style = design.get("callout_style") if isinstance(design.get("callout_style"), dict) else {}
+    callout_h = float(callout_style.get("height", 74) or 74)
     padding_x = float(card_style.get("padding_x", 20))
     x = float(results_box["x"]) + padding_x
     y = float(results_box["y"]) + 69
@@ -637,7 +651,7 @@ def build_component_boxes(
             "x": x + index * (box_w + gap),
             "y": y,
             "width": box_w,
-            "height": 74,
+            "height": callout_h,
         }
     return component_boxes
 
@@ -709,6 +723,7 @@ def build_svg(content: dict[str, Any], outputs_dir: Path, design: dict[str, Any]
     result_callouts = design.get("callouts") if isinstance(design.get("callouts"), list) else content.get("result_callouts", [])
     if not isinstance(result_callouts, list):
         result_callouts = []
+    callout_style = design.get("callout_style") if isinstance(design.get("callout_style"), dict) else {}
 
     title = clean_space(content.get("title", "Untitled Paper"))
     authors = content.get("authors", [])
@@ -774,7 +789,7 @@ def build_svg(content: dict[str, Any], outputs_dir: Path, design: dict[str, Any]
     parts.append("</g>")
 
     parts.append('<g id="column-3">')
-    parts.append(draw_panel("results", "Results", section_bullets(content, "results"), **results_box, accent=str(colors["accent_result"]), max_bullets=6, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("results", "hero")), callouts=result_callouts))
+    parts.append(draw_panel("results", "Results", section_bullets(content, "results"), **results_box, accent=str(colors["accent_result"]), max_bullets=6, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("results", "hero")), callouts=result_callouts, callout_style=callout_style))
     parts.append(draw_panel("contribution", "Contributions", section_bullets(content, "contribution"), **contribution_box, accent="#0891b2", max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("contribution", "compact"))))
     conclusion_bullets = section_bullets(content, "conclusion") + section_bullets(content, "limitations")[:1]
     parts.append(draw_panel("conclusion", "Conclusion", conclusion_bullets, **conclusion_box, accent=str(colors["accent_neutral"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("conclusion", "compact"))))
