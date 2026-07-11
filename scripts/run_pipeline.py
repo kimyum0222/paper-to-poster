@@ -38,6 +38,7 @@ def write_generation_report(
     extracted = read_json(outputs_dir / "extracted_paper.json")
     content = read_json(outputs_dir / "poster_content.json")
     layout = read_json(outputs_dir / "poster_layout.json")
+    overflow_report = read_json(outputs_dir / "poster_overflow_report.json")
 
     generated_files = [
         "poster.svg",
@@ -45,6 +46,7 @@ def write_generation_report(
         "poster_content.json",
         "poster_design_spec.json",
         "poster_layout.json",
+        "poster_overflow_report.json",
     ]
     existing_files = [name for name in generated_files if (outputs_dir / name).exists()]
     if (outputs_dir / "assets").exists():
@@ -116,6 +118,10 @@ def write_generation_report(
         "",
         f"- SVG validation: {validation_status}",
     ])
+    if overflow_report:
+        report.append(f"- Text overflow check: {overflow_report.get('status', 'unknown')}")
+        report.append(f"- Text lines checked: {overflow_report.get('total_text_lines_checked', 0)}")
+        report.append(f"- Overflowing text lines: {overflow_report.get('overflow_line_count', 0)}")
     if failed_step:
         report.append(f"- Failed step: `{' '.join(failed_step)}`")
 
@@ -189,7 +195,17 @@ def main() -> int:
     )
 
     if not args.skip_validate and Path("scripts/validate_svg.py").exists():
-        steps.append([python, "scripts/validate_svg.py", str(outputs_dir / "poster.svg"), "--outputs-dir", str(outputs_dir), "--layout-json", str(outputs_dir / "poster_layout.json")])
+        steps.append([
+            python,
+            "scripts/validate_svg.py",
+            str(outputs_dir / "poster.svg"),
+            "--outputs-dir",
+            str(outputs_dir),
+            "--layout-json",
+            str(outputs_dir / "poster_layout.json"),
+            "--overflow-report",
+            str(outputs_dir / "poster_overflow_report.json"),
+        ])
 
     step_results: list[dict[str, Any]] = []
     for step in steps:

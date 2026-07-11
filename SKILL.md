@@ -74,6 +74,7 @@ Supporting outputs:
 - `outputs/poster_content.json`
 - `outputs/poster_design_spec.json`
 - `outputs/poster_layout.json`
+- `outputs/poster_overflow_report.json`
 - `outputs/generation_report.md`
 - `outputs/assets/` for extracted figures, tables, diagrams, icons, or intermediate local assets.
 
@@ -94,7 +95,7 @@ If `outputs/poster.svg` cannot be generated, still create the best available int
 9. Save design decisions as `outputs/poster_design_spec.json`.
 10. Generate `outputs/poster.svg` from the design spec and content using a deterministic SVG renderer.
 11. Save realized layout decisions as `outputs/poster_layout.json`.
-12. Validate the SVG and referenced assets.
+12. Validate the SVG, referenced assets, layout boxes, and text overflow.
 13. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
 14. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
 
@@ -321,7 +322,7 @@ Recommended script structure:
 - `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
 - `scripts/build_poster_design.py`: build `outputs/poster_design_spec.json` with template, hierarchy, grid, typography, palette, density, and overflow parameters.
 - `scripts/build_poster_svg.py`: generate `outputs/poster.svg` from poster content and design spec.
-- `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, and basic layout issues.
+- `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, basic layout issues, and estimated text overflow per block.
 
 Scripts should write outputs only under `outputs/` unless the user requests otherwise.
 
@@ -338,6 +339,7 @@ Before finishing, confirm or report:
 - There are no `<script>` elements, remote URLs, remote fonts, remote stylesheets, or unsupported `<foreignObject>` elements.
 - Referenced local assets exist under `outputs/assets/`.
 - Major sections do not overlap, overflow, or fall off the canvas.
+- Poster text lines stay inside their assigned section bounding boxes, with any estimated overflow reported in `outputs/poster_overflow_report.json`.
 - Figures, tables, captions, and claims remain faithful to the paper.
 - Omitted or unavailable sections are reported in `outputs/generation_report.md`.
 

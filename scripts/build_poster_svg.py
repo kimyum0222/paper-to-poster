@@ -370,6 +370,10 @@ def draw_panel(
         current_y = title_y + 38
 
     for bullet in bullets[:max_bullets]:
+        max_lines = 2 if variant in {"compact", "hero"} else 3
+        projected_lines = wrap_text(bullet, w - padding_x * 2, body_size, max_lines=max_lines)
+        if current_y + body_line * len(projected_lines) > y + h - 14:
+            break
         text_svg, current_y = svg_text_lines(
             bullet,
             x + padding_x + 2,
@@ -378,7 +382,7 @@ def draw_panel(
             font_size=body_size,
             line_height=body_line,
             css_class="body",
-            max_lines=2 if variant in {"compact", "hero"} else 3,
+            max_lines=max_lines,
             bullet=True,
         )
         parts.append(text_svg)
@@ -535,7 +539,7 @@ def template_boxes(
     col2_x = margin + column_w + gutter
     col3_x = margin + 2 * (column_w + gutter)
     footer_box = {"x": margin, "y": canvas_h - footer_h, "width": canvas_w - 2 * margin, "height": footer_h - 8}
-    header_box = {"x": margin, "y": 24, "width": canvas_w - 2 * margin, "height": header_h - 28}
+    header_box = {"x": margin, "y": 0, "width": canvas_w - 2 * margin, "height": header_h + 8}
 
     if template == "result_centered":
         return {
