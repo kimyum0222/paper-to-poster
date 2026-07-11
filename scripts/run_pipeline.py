@@ -39,6 +39,7 @@ def write_generation_report(
     content = read_json(outputs_dir / "poster_content.json")
     layout = read_json(outputs_dir / "poster_layout.json")
     overflow_report = read_json(outputs_dir / "poster_overflow_report.json")
+    faithfulness_report = read_json(outputs_dir / "poster_faithfulness_report.json")
 
     generated_files = [
         "poster.svg",
@@ -47,6 +48,7 @@ def write_generation_report(
         "poster_design_spec.json",
         "poster_layout.json",
         "poster_overflow_report.json",
+        "poster_faithfulness_report.json",
     ]
     existing_files = [name for name in generated_files if (outputs_dir / name).exists()]
     if (outputs_dir / "assets").exists():
@@ -122,6 +124,11 @@ def write_generation_report(
         report.append(f"- Text overflow check: {overflow_report.get('status', 'unknown')}")
         report.append(f"- Text lines checked: {overflow_report.get('total_text_lines_checked', 0)}")
         report.append(f"- Overflowing text lines: {overflow_report.get('overflow_line_count', 0)}")
+    if faithfulness_report:
+        report.append(f"- Faithfulness review: {faithfulness_report.get('status', 'unknown')}")
+        report.append(f"- Faithfulness claims reviewed: {faithfulness_report.get('review_count', 0)}")
+        report.append(f"- High-risk claim count: {faithfulness_report.get('high_risk_count', 0)}")
+        report.append(f"- Medium-risk claim count: {faithfulness_report.get('medium_risk_count', 0)}")
     if failed_step:
         report.append(f"- Failed step: `{' '.join(failed_step)}`")
 
@@ -164,6 +171,8 @@ def main() -> int:
     parser.add_argument("--skip-validate", action="store_true")
     parser.add_argument("--use-vision-review", action="store_true", help="Use an OpenAI vision model to review figure candidates before content selection.")
     parser.add_argument("--vision-model", default=None, help="OpenAI vision-capable model for --use-vision-review.")
+    parser.add_argument("--use-faithfulness-review", action="store_true", help="Use an OpenAI text model to review poster claims against source evidence.")
+    parser.add_argument("--faithfulness-model", default=None, help="OpenAI model for --use-faithfulness-review.")
     args = parser.parse_args()
 
     python = sys.executable
@@ -189,6 +198,24 @@ def main() -> int:
     steps.extend(
         [
             [python, "scripts/build_poster_content.py", "--input-json", str(outputs_dir / "extracted_paper.json"), "--output-json", str(outputs_dir / "poster_content.json")],
+        ]
+    )
+    if args.use_faithfulness_review:
+        faithfulness_step = [
+            python,
+            "scripts/review_poster_faithfulness_with_openai.py",
+            "--content-json",
+            str(outputs_dir / "poster_content.json"),
+            "--extracted-json",
+            str(outputs_dir / "extracted_paper.json"),
+            "--output-json",
+            str(outputs_dir / "poster_faithfulness_report.json"),
+        ]
+        if args.faithfulness_model:
+            faithfulness_step.extend(["--model", args.faithfulness_model])
+        steps.append(faithfulness_step)
+    steps.extend(
+        [
             [python, "scripts/build_poster_design.py", "--content-json", str(outputs_dir / "poster_content.json"), "--output-json", str(outputs_dir / "poster_design_spec.json")],
             [python, "scripts/build_poster_svg.py", "--content-json", str(outputs_dir / "poster_content.json"), "--design-json", str(outputs_dir / "poster_design_spec.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
         ]

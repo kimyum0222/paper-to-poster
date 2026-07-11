@@ -75,6 +75,7 @@ Supporting outputs:
 - `outputs/poster_design_spec.json`
 - `outputs/poster_layout.json`
 - `outputs/poster_overflow_report.json`
+- `outputs/poster_faithfulness_report.json` when semantic claim review is enabled.
 - `outputs/generation_report.md`
 - `outputs/assets/` for extracted figures, tables, diagrams, icons, or intermediate local assets.
 
@@ -91,13 +92,14 @@ If `outputs/poster.svg` cannot be generated, still create the best available int
 5. Convert the extracted material into concise poster sections.
 6. Select the highest-value figures, tables, diagrams, result plots, or qualitative examples.
 7. Save poster content as `outputs/poster_content.json`.
-8. Build a structured design spec for information hierarchy, template choice, canvas, grid, typography, palette, figure placement, density, and overflow rules.
-9. Save design decisions as `outputs/poster_design_spec.json`.
-10. Generate `outputs/poster.svg` from the design spec and content using a deterministic SVG renderer.
-11. Save realized layout decisions as `outputs/poster_layout.json`.
-12. Validate the SVG, referenced assets, layout boxes, and text overflow.
-13. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
-14. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
+8. When enabled, review poster claims against their source evidence with an OpenAI text model and save `outputs/poster_faithfulness_report.json`.
+9. Build a structured design spec for information hierarchy, template choice, canvas, grid, typography, palette, figure placement, density, and overflow rules.
+10. Save design decisions as `outputs/poster_design_spec.json`.
+11. Generate `outputs/poster.svg` from the design spec and content using a deterministic SVG renderer.
+12. Save realized layout decisions as `outputs/poster_layout.json`.
+13. Validate the SVG, referenced assets, layout boxes, and text overflow.
+14. Write `outputs/generation_report.md` with generated files, assumptions, omitted sections, limitations, and validation results.
+15. In the final response, list generated files with `outputs/poster.svg` first and mention any limitations.
 
 ## Extraction Guidance
 
@@ -148,7 +150,10 @@ For figure extraction, preserve enough metadata for selection and faithful place
 - `authors`
 - `affiliations`
 - `take_home_message`
+- `take_home_evidence`
 - `result_callouts`
+- `result_callout_evidence`
+- `poster_claims`
 - `problem`
 - `motivation`
 - `core_idea`
@@ -165,6 +170,20 @@ For figure extraction, preserve enough metadata for selection and faithful place
 - `figure_selection_policy`
 - `footer_metadata`
 - `omitted_sections`
+
+Each poster claim, bullet, and callout should preserve source evidence when available. Prefer adding `evidence` arrays next to rendered bullet lists instead of replacing the bullet strings, so deterministic renderers remain simple while faithfulness review can audit each claim.
+
+`outputs/poster_faithfulness_report.json`, when produced, should include:
+
+- `status`
+- `model`
+- `summary`
+- `claim_count`
+- `review_count`
+- `high_risk_count`
+- `medium_risk_count`
+- `reviews`
+- `claims`
 
 `outputs/poster_layout.json` should describe layout decisions in the same coordinate system as the SVG `viewBox`:
 
@@ -320,6 +339,7 @@ Recommended script structure:
 - `scripts/extract_paper.py`: extract text, metadata, figures, tables, and captions.
 - `scripts/review_figures_with_openai.py`: optionally use an OpenAI vision model to classify figure importance, readability, and poster role.
 - `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
+- `scripts/review_poster_faithfulness_with_openai.py`: optionally use an OpenAI text model to check poster claims against source evidence.
 - `scripts/build_poster_design.py`: build `outputs/poster_design_spec.json` with template, hierarchy, grid, typography, palette, density, and overflow parameters.
 - `scripts/build_poster_svg.py`: generate `outputs/poster.svg` from poster content and design spec.
 - `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, basic layout issues, and estimated text overflow per block.
@@ -340,6 +360,7 @@ Before finishing, confirm or report:
 - Referenced local assets exist under `outputs/assets/`.
 - Major sections do not overlap, overflow, or fall off the canvas.
 - Poster text lines stay inside their assigned section bounding boxes, with any estimated overflow reported in `outputs/poster_overflow_report.json`.
+- When semantic review is enabled, poster claims are reviewed against extracted source evidence and reported in `outputs/poster_faithfulness_report.json`.
 - Figures, tables, captions, and claims remain faithful to the paper.
 - Omitted or unavailable sections are reported in `outputs/generation_report.md`.
 

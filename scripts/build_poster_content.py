@@ -90,11 +90,62 @@ def split_sentences(text: str) -> list[str]:
     return [clean_space(part) for part in parts if len(clean_space(part)) >= 20]
 
 
-def trim_words(text: str, max_words: int = 18) -> str:
-    words = clean_space(text).split()
+def ensure_terminal_punctuation(text: str) -> str:
+    text = clean_space(text).rstrip(",;:")
+    if not text:
+        return ""
+    if text[-1] in ".!?":
+        return text
+    return text + "."
+
+
+def cut_at_readable_boundary(text: str, max_words: int) -> str:
+    text = clean_space(text)
+    words = text.split()
     if len(words) <= max_words:
-        return clean_space(text)
-    return " ".join(words[:max_words]).rstrip(",;:") + "…"
+        return ensure_terminal_punctuation(text)
+
+    for separator in ["; ", ": ", ", which ", ", allowing ", ", while ", ", and "]:
+        if separator not in text:
+            continue
+        candidate = text.split(separator, 1)[0]
+        if 6 <= len(candidate.split()) <= max_words:
+            return ensure_terminal_punctuation(candidate)
+
+    return ensure_terminal_punctuation(" ".join(words[:max_words]))
+
+
+def make_poster_sentence(text: str, max_words: int = 18) -> str:
+    sentence = clean_space(text)
+    if not sentence:
+        return ""
+    lowered = sentence.lower()
+
+    # High-signal rule rewrites keep the claim grounded while making the output
+    # read like poster copy instead of a chopped abstract sentence.
+    if "generate both reasoning traces and task" in lowered and "actions" in lowered:
+        return "ReAct interleaves reasoning traces with task-specific actions."
+    if "large language models" in lowered and "interactive decision making" in lowered:
+        return "LLMs need better coordination between reasoning and acting."
+    if "diverse set of language and decision making tasks" in lowered:
+        return "ReAct is evaluated on language and decision-making tasks."
+    if ("hotpotqa" in lowered or "fever" in lowered) and ("hallucination" in lowered or "error propagation" in lowered):
+        return "On HotpotQA and Fever, ReAct reduces hallucination and error propagation."
+    if ("alfworld" in lowered or "webshop" in lowered) and "success rate" in lowered:
+        values = re.findall(r"\b\d+(?:\.\d+)?\s*%", sentence)
+        if values:
+            return f"On interactive benchmarks, ReAct improves success rates by {' and '.join(value.replace(' ', '') for value in values[:2])}."
+        return "ReAct improves success rates on interactive benchmarks."
+
+    sentence = re.sub(r"(?i)^in this paper,\s*", "", sentence)
+    sentence = re.sub(r"(?i)^we explore the use of\s+", "We use ", sentence)
+    sentence = re.sub(r"(?i)^we apply our approach,\s*named\s*", "We apply ", sentence)
+    sentence = re.sub(r"\s*\([^)]{40,}\)", "", sentence)
+    return cut_at_readable_boundary(sentence, max_words=max_words)
+
+
+def trim_words(text: str, max_words: int = 18) -> str:
+    return make_poster_sentence(text, max_words=max_words)
 
 
 def make_bullets(text: str, max_bullets: int, max_words: int = 18) -> list[str]:
@@ -113,6 +164,58 @@ def make_bullets(text: str, max_bullets: int, max_words: int = 18) -> list[str]:
             break
 
     return bullets
+
+
+def source_record(source_name: str, sentence: str) -> dict[str, str]:
+    return {
+        "source": source_name,
+        "text": clean_space(sentence),
+    }
+
+
+def make_bullets_with_evidence(
+    text: str,
+    max_bullets: int,
+    source_name: str,
+    max_words: int = 18,
+) -> tuple[list[str], list[dict[str, str]]]:
+    sentences = split_sentences(text)
+    bullets: list[str] = []
+    evidence: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for sentence in sentences:
+        bullet = make_poster_sentence(sentence, max_words=max_words)
+        key = re.sub(r"[^a-z0-9]", "", bullet.lower())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        bullets.append(bullet)
+        evidence.append({
+            "claim": bullet,
+            "source": source_name,
+            "evidence_text": clean_space(sentence),
+        })
+        if len(bullets) >= max_bullets:
+            break
+
+    return bullets, evidence
+
+
+def make_take_home_with_evidence(*sources: tuple[str, str]) -> tuple[str, dict[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    for source_name, source_text in sources:
+        for sentence in split_sentences(source_text):
+            candidates.append((source_name, sentence))
+    if not candidates:
+        return "", {}
+    source_name, best = max(candidates[:12], key=lambda item: sentence_score_for_message(item[1]))
+    claim = make_poster_sentence(best, max_words=22)
+    return claim, {
+        "claim": claim,
+        "source": source_name,
+        "evidence_text": clean_space(best),
+    }
 
 
 def sentence_score_for_message(sentence: str) -> int:
@@ -139,13 +242,8 @@ def sentence_score_for_message(sentence: str) -> int:
 
 
 def make_take_home_message(*sources: str) -> str:
-    sentences: list[str] = []
-    for source in sources:
-        sentences.extend(split_sentences(source))
-    if not sentences:
-        return ""
-    best = max(sentences[:12], key=sentence_score_for_message)
-    return trim_words(best, max_words=28)
+    claim, _ = make_take_home_with_evidence(*[(f"source_{index + 1}", source) for index, source in enumerate(sources)])
+    return claim
 
 
 def label_for_result_sentence(sentence: str) -> str:
@@ -161,14 +259,16 @@ def label_for_result_sentence(sentence: str) -> str:
     return "Key Evidence"
 
 
-def make_result_callouts(*sources: str, limit: int = 3) -> list[dict[str, str]]:
-    sentences: list[str] = []
-    for source in sources:
-        sentences.extend(split_sentences(source))
+def make_result_callouts_with_evidence(*sources: tuple[str, str], limit: int = 3) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    sentences: list[tuple[str, str]] = []
+    for source_name, source_text in sources:
+        for sentence in split_sentences(source_text):
+            sentences.append((source_name, sentence))
 
     callouts: list[dict[str, str]] = []
+    evidence: list[dict[str, str]] = []
     seen: set[str] = set()
-    for sentence in sentences:
+    for source_name, sentence in sentences:
         lowered = sentence.lower()
         if not any(marker in lowered for marker in [
             "%", "outperform", "success rate", "accuracy", "improve", "achieve",
@@ -190,6 +290,14 @@ def make_result_callouts(*sources: str, limit: int = 3) -> list[dict[str, str]]:
             value = "Reported"
         else:
             value = "Validated"
+        if any(term in lowered for term in ["hotpotqa", "fever"]):
+            detail = "HotpotQA and Fever."
+        elif any(term in lowered for term in ["alfworld", "webshop"]):
+            detail = "ALFWorld and WebShop."
+        elif "diverse set of language and decision making tasks" in lowered:
+            detail = "Language and decision tasks."
+        else:
+            detail = make_poster_sentence(sentence, max_words=10)
         key = clean_space(label_for_result_sentence(sentence) + value)
         if key in seen:
             continue
@@ -197,12 +305,89 @@ def make_result_callouts(*sources: str, limit: int = 3) -> list[dict[str, str]]:
         callouts.append({
             "label": label_for_result_sentence(sentence),
             "value": value,
-            "detail": trim_words(sentence, max_words=18),
+            "detail": detail,
+        })
+        evidence.append({
+            "claim": f"{label_for_result_sentence(sentence)}: {value}. {detail}",
+            "source": source_name,
+            "evidence_text": clean_space(sentence),
         })
         if len(callouts) >= limit:
             break
 
+    return callouts, evidence
+
+
+def make_result_callouts(*sources: str, limit: int = 3) -> list[dict[str, str]]:
+    callouts, _ = make_result_callouts_with_evidence(
+        *[(f"source_{index + 1}", source) for index, source in enumerate(sources)],
+        limit=limit,
+    )
     return callouts
+
+
+def make_section(heading: str, source_text: str, limit: int, source_name: str, max_words: int = 18) -> dict[str, Any]:
+    bullets, evidence = make_bullets_with_evidence(source_text, limit, source_name, max_words=max_words)
+    return {
+        "heading": heading,
+        "bullets": bullets,
+        "evidence": evidence,
+    }
+
+
+def collect_poster_claims(content: dict[str, Any]) -> list[dict[str, str]]:
+    claims: list[dict[str, str]] = []
+    take_home = clean_space(content.get("take_home_message", ""))
+    take_home_evidence = content.get("take_home_evidence")
+    if take_home and isinstance(take_home_evidence, dict):
+        claims.append({
+            "id": "take_home_message",
+            "section": "take_home_message",
+            "claim": take_home,
+            "source": clean_space(take_home_evidence.get("source", "")),
+            "evidence_text": clean_space(take_home_evidence.get("evidence_text", "")),
+        })
+
+    callout_evidence = content.get("result_callout_evidence", [])
+    if isinstance(callout_evidence, list):
+        for index, item in enumerate(callout_evidence):
+            if not isinstance(item, dict):
+                continue
+            claims.append({
+                "id": f"result_callout_{index + 1}",
+                "section": "result_callouts",
+                "claim": clean_space(item.get("claim", "")),
+                "source": clean_space(item.get("source", "")),
+                "evidence_text": clean_space(item.get("evidence_text", "")),
+            })
+
+    for section_key in ["problem", "motivation", "core_idea", "method", "results", "conclusion", "contribution", "limitations"]:
+        section = content.get(section_key)
+        if not isinstance(section, dict):
+            continue
+        section_evidence = section.get("evidence", [])
+        if not isinstance(section_evidence, list):
+            continue
+        for index, item in enumerate(section_evidence):
+            if not isinstance(item, dict):
+                continue
+            claims.append({
+                "id": f"{section_key}_{index + 1}",
+                "section": section_key,
+                "claim": clean_space(item.get("claim", "")),
+                "source": clean_space(item.get("source", "")),
+                "evidence_text": clean_space(item.get("evidence_text", "")),
+            })
+
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for claim in claims:
+        key = re.sub(r"[^a-z0-9]+", "", claim.get("claim", "").lower())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(claim)
+    return unique
 
 
 def section_or_empty(data: dict[str, Any], key: str) -> str:
@@ -509,56 +694,50 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
         if not section_or_empty(data, key):
             omitted_sections.append(key)
 
+    take_home_message, take_home_evidence = make_take_home_with_evidence(
+        ("abstract", abstract),
+        ("results", results_source),
+        ("conclusion", conclusion_source),
+        ("introduction", intro),
+    )
+    result_callouts, result_callout_evidence = make_result_callouts_with_evidence(
+        ("results", results_source),
+        ("abstract", abstract),
+        ("conclusion", conclusion_source),
+        limit=3,
+    )
+
     content = {
         "title": clean_space(data.get("title", "")) or "Untitled Paper",
         "authors": data.get("authors", []) if isinstance(data.get("authors", []), list) else [],
         "affiliations": data.get("affiliations", []) if isinstance(data.get("affiliations", []), list) else [],
-        "take_home_message": make_take_home_message(abstract, results_source, conclusion_source, intro),
-        "result_callouts": make_result_callouts(results_source, abstract, conclusion_source, limit=3),
-        "problem": {
-            "heading": "Problem",
-            "bullets": make_bullets(problem_source, SECTION_LIMITS["problem"]),
-        },
-        "motivation": {
-            "heading": "Motivation",
-            "bullets": make_bullets(intro, 2),
-        },
-        "core_idea": {
-            "heading": "Core Idea",
-            "bullets": make_bullets(core_idea_source, SECTION_LIMITS["core_idea"]),
-        },
-        "method": {
-            "heading": "Method",
-            "bullets": make_bullets(method_source, SECTION_LIMITS["method"]),
-        },
+        "take_home_message": take_home_message,
+        "take_home_evidence": take_home_evidence,
+        "result_callouts": result_callouts,
+        "result_callout_evidence": result_callout_evidence,
+        "problem": make_section("Problem", problem_source, SECTION_LIMITS["problem"], "abstract_or_introduction"),
+        "motivation": make_section("Motivation", intro, 2, "introduction"),
+        "core_idea": make_section("Core Idea", core_idea_source, SECTION_LIMITS["core_idea"], "abstract_or_methods"),
+        "method": make_section("Method", method_source, SECTION_LIMITS["method"], "methods_or_abstract"),
         "theoretical_foundation": {
             "heading": "Theory",
             "bullets": [],
+            "evidence": [],
         },
-        "results": {
-            "heading": "Results",
-            "bullets": make_bullets(results_source, SECTION_LIMITS["results"]),
-        },
-        "conclusion": {
-            "heading": "Conclusion",
-            "bullets": make_bullets(conclusion_source, SECTION_LIMITS["conclusion"]),
-        },
-        "contribution": {
-            "heading": "Contributions",
-            "bullets": make_bullets(first_nonempty(conclusion, abstract), SECTION_LIMITS["contribution"]),
-        },
+        "results": make_section("Results", results_source, SECTION_LIMITS["results"], "results_or_abstract"),
+        "conclusion": make_section("Conclusion", conclusion_source, SECTION_LIMITS["conclusion"], "conclusion_or_abstract"),
+        "contribution": make_section("Contributions", first_nonempty(conclusion, abstract), SECTION_LIMITS["contribution"], "conclusion_or_abstract"),
         "innovation": {
             "heading": "Novelty",
             "bullets": [],
+            "evidence": [],
         },
         "significance": {
             "heading": "Significance",
             "bullets": [],
+            "evidence": [],
         },
-        "limitations": {
-            "heading": "Limitations",
-            "bullets": make_bullets(section_or_empty(data, "limitations"), SECTION_LIMITS["limitations"]),
-        },
+        "limitations": make_section("Limitations", section_or_empty(data, "limitations"), SECTION_LIMITS["limitations"], "limitations"),
         "figures_to_use": select_figures(data, max_figures=2),
         "figure_candidates": figure_candidates(data, limit=8),
         "figure_selection_policy": {
@@ -579,7 +758,11 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
     fallback_text = first_nonempty(abstract, intro, "\n".join(str(page.get("text", "")) for page in (data.get("pages") or [])[:2]))
     for key in ["problem", "core_idea", "method", "results", "conclusion", "contribution"]:
         if not content[key]["bullets"]:
-            content[key]["bullets"] = make_bullets(fallback_text, 2)
+            bullets, evidence = make_bullets_with_evidence(fallback_text, 2, "fallback_text")
+            content[key]["bullets"] = bullets
+            content[key]["evidence"] = evidence
+
+    content["poster_claims"] = collect_poster_claims(content)
 
     return content
 

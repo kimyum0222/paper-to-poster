@@ -170,7 +170,7 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
             "max_figures": 2,
             "primary_slot": "key_figures.primary",
             "secondary_slot": "key_figures.secondary",
-            "caption_lines": 2,
+            "caption_lines": 3,
             "preserve_aspect_ratio": "xMidYMid meet",
         },
         "section_density": density,
