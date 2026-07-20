@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,66 @@ def choose_template(content: dict[str, Any]) -> tuple[str, str]:
     return "text_fallback", "Selected because no strong extracted figure role was available."
 
 
-def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
+def apply_visual_brief(spec: dict[str, Any], visual_brief: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(visual_brief, dict) or not visual_brief:
+        return spec
+    status = str(visual_brief.get("status", "unknown") or "unknown")
+    generation = visual_brief.get("generation") if isinstance(visual_brief.get("generation"), dict) else {}
+    analysis = visual_brief.get("visual_analysis") if isinstance(visual_brief.get("visual_analysis"), dict) else {}
+    analysis_status = str(analysis.get("status", "not_run") or "not_run")
+    generation_status = str(generation.get("status", "not_run") or "not_run")
+    generation_sha256 = str(generation.get("sha256", "")).strip().lower()
+    analysis_sha256 = str(analysis.get("source_sha256", "")).strip().lower()
+    hash_matches = (
+        re.fullmatch(r"[0-9a-f]{64}", generation_sha256) is not None
+        and generation_sha256 == analysis_sha256
+    )
+    derived_tokens = analysis.get("derived_design_tokens")
+    tokens_applied = (
+        status == "generated"
+        and generation_status == "generated"
+        and analysis_status == "passed"
+        and hash_matches
+        and isinstance(derived_tokens, dict)
+    )
+    spec["art_direction"] = {
+        "status": status,
+        "generation_status": generation_status,
+        "analysis_status": analysis_status,
+        "analysis_method": analysis.get("method"),
+        "reference_hash_verified": hash_matches,
+        "provider": visual_brief.get("provider", "rightcode"),
+        "model": visual_brief.get("model"),
+        "prompt_version": visual_brief.get("prompt_version"),
+        "style_reference_path": generation.get("output_path") if status == "generated" else None,
+        "asset_class": "style_reference_only",
+        "embedded_in_final_svg": False,
+        "tokens_applied": tokens_applied,
+        "influence": (
+            "palette derived from analyzed and hash-matched reference pixels; scientific content remains deterministic"
+            if tokens_applied
+            else "none; deterministic design fallback retained"
+        ),
+        "failure_or_fallback_notes": visual_brief.get("failure_or_fallback_notes", []),
+    }
+    if not tokens_applied:
+        return spec
+
+    tokens = derived_tokens
+    spec["theme"] = "model_art_directed_academic"
+
+    palette = tokens.get("color_palette")
+    if isinstance(palette, dict):
+        accepted = spec["color_palette"]
+        for key in list(accepted) + ["accent_idea", "accent_contribution"]:
+            value = palette.get(key)
+            if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                accepted[key] = value.lower()
+
+    return spec
+
+
+def build_design_spec(content: dict[str, Any], visual_brief: dict[str, Any] | None = None) -> dict[str, Any]:
     template, template_rationale = choose_template(content)
     result_callouts = content.get("result_callouts", [])
     if not isinstance(result_callouts, list):
@@ -93,7 +153,7 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
         count = section_bullet_count(content, key)
         density[key] = "compact" if count <= 2 else "medium" if count <= 4 else "dense"
 
-    return {
+    spec = {
         "version": 1,
         "theme": "modern_academic_evidence",
         "template": template,
@@ -142,6 +202,8 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
             "accent_secondary": "#0f766e",
             "accent_result": "#c2410c",
             "accent_neutral": "#475569",
+            "accent_idea": "#7c3aed",
+            "accent_contribution": "#0891b2",
             "header_rule": "#9bb5d6",
             "header_background": "#12233f",
             "header_text": "#ffffff",
@@ -182,6 +244,7 @@ def build_design_spec(content: dict[str, Any]) -> dict[str, Any]:
             "never_allow_panel_overlap",
         ],
     }
+    return apply_visual_brief(spec, visual_brief)
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -192,6 +255,7 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build structured poster design/layout spec from poster_content.json.")
     parser.add_argument("--content-json", default="outputs/poster_content.json")
+    parser.add_argument("--visual-brief-json", default=None)
     parser.add_argument("--output-json", default="outputs/poster_design_spec.json")
     args = parser.parse_args()
 
@@ -201,8 +265,19 @@ def main() -> int:
         print(f"Error: content JSON does not exist: {content_json}", file=sys.stderr)
         return 1
 
-    content = json.loads(content_json.read_text(encoding="utf-8"))
-    spec = build_design_spec(content)
+    try:
+        content = json.loads(content_json.read_text(encoding="utf-8"))
+        visual_brief = None
+        if args.visual_brief_json:
+            visual_brief_path = Path(args.visual_brief_json)
+            if not visual_brief_path.exists():
+                print(f"Error: visual brief JSON does not exist: {visual_brief_path}", file=sys.stderr)
+                return 1
+            visual_brief = json.loads(visual_brief_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Error: could not read design input JSON: {exc}", file=sys.stderr)
+        return 1
+    spec = build_design_spec(content, visual_brief)
     write_json(output_json, spec)
     print(f"Wrote {output_json}")
     print(f"Template: {spec.get('template')}")

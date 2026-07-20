@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from openai_response_utils import response_output_text
+
 
 def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
@@ -189,7 +191,7 @@ Rules:
         model=model,
         input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
     )
-    raw = getattr(response, "output_text", "") or ""
+    raw = response_output_text(response)
     data = safe_json_object(raw)
     if not data:
         return {

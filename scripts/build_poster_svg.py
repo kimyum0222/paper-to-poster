@@ -31,6 +31,8 @@ DEFAULT_COLORS = {
     "accent_secondary": "#16a34a",
     "accent_result": "#ea580c",
     "accent_neutral": "#475569",
+    "accent_idea": "#7c3aed",
+    "accent_contribution": "#0891b2",
     "header_rule": "#b8c7db",
     "header_background": "#12233f",
     "header_text": "#ffffff",
@@ -780,7 +782,7 @@ def build_svg(content: dict[str, Any], outputs_dir: Path, design: dict[str, Any]
 
     parts.append('<g id="column-1">')
     parts.append(draw_panel("problem", "Problem / Motivation", section_bullets(content, "problem") + section_bullets(content, "motivation")[:1], **problem_box, accent=str(colors["accent_primary"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("problem", "standard"))))
-    parts.append(draw_panel("core-idea", "Core Idea", section_bullets(content, "core_idea"), **core_box, accent="#7c3aed", max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("core_idea", "standard"))))
+    parts.append(draw_panel("core-idea", "Core Idea", section_bullets(content, "core_idea"), **core_box, accent=str(colors["accent_idea"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("core_idea", "standard"))))
     parts.append("</g>")
 
     parts.append('<g id="column-2">')
@@ -790,7 +792,7 @@ def build_svg(content: dict[str, Any], outputs_dir: Path, design: dict[str, Any]
 
     parts.append('<g id="column-3">')
     parts.append(draw_panel("results", "Results", section_bullets(content, "results"), **results_box, accent=str(colors["accent_result"]), max_bullets=6, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("results", "hero")), callouts=result_callouts, callout_style=callout_style))
-    parts.append(draw_panel("contribution", "Contributions", section_bullets(content, "contribution"), **contribution_box, accent="#0891b2", max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("contribution", "compact"))))
+    parts.append(draw_panel("contribution", "Contributions", section_bullets(content, "contribution"), **contribution_box, accent=str(colors["accent_contribution"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("contribution", "compact"))))
     conclusion_bullets = section_bullets(content, "conclusion") + section_bullets(content, "limitations")[:1]
     parts.append(draw_panel("conclusion", "Conclusion", conclusion_bullets, **conclusion_box, accent=str(colors["accent_neutral"]), max_bullets=4, typography=typography, colors=colors, card_style=card_style, variant=str(card_variants.get("conclusion", "compact"))))
     parts.append("</g>")

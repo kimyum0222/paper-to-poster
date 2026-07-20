@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -29,15 +30,14 @@ FIGURE_KEYWORDS = [
 
 METHOD_FIGURE_KEYWORDS = [
     "framework", "architecture", "pipeline", "overview", "method", "approach",
-    "model", "system", "workflow", "comparison of", "prompting methods",
-    "reason", "act", "react", "algorithm", "示意", "框架", "流程", "方法", "模型",
+    "model", "system", "workflow", "algorithm", "procedure", "示意", "框架",
+    "流程", "方法", "模型",
 ]
 
 RESULT_FIGURE_KEYWORDS = [
     "result", "results", "performance", "accuracy", "success rate", "evaluation",
     "experiment", "benchmark", "baseline", "baselines", "scaling", "ablation",
-    "hotpotqa", "fever", "alfworld", "webshop", "结果", "性能", "准确率", "对比",
-    "实验", "消融",
+    "comparison", "quantitative", "结果", "性能", "准确率", "对比", "实验", "消融",
 ]
 
 CASE_FIGURE_KEYWORDS = [
@@ -59,6 +59,16 @@ def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
+def normalized_evidence_text(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = text.replace("‐", "-").replace("‑", "-").replace("–", "-").replace("—", "-")
+    return clean_space(text).casefold()
+
+
+def dedupe_key(value: Any) -> str:
+    return re.sub(r"[\W_]+", "", normalized_evidence_text(value), flags=re.UNICODE)
+
+
 def clean_source_text(text: str) -> str:
     lines = []
     for raw_line in str(text).splitlines():
@@ -70,11 +80,7 @@ def clean_source_text(text: str) -> str:
             continue
         if re.fullmatch(r"\d{1,3}", line):
             continue
-        if re.match(r"^\d+\s*(human feedback|work during|project page|projet page)", lowered):
-            continue
         if lowered.startswith(("project page", "projet page", "∗work during")):
-            continue
-        if re.fullmatch(r"(method|score|sr|act|react|human|expert|all|pick|clean|heat|cool|look|pick 2)", lowered):
             continue
         lines.append(line)
     return "\n".join(lines)
@@ -86,7 +92,10 @@ def split_sentences(text: str) -> list[str]:
         return []
     # Simple sentence splitter. Good enough for a first MVP; it avoids requiring
     # any external NLP package.
-    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text)
+    parts = re.split(
+        r"(?<=[.!?。！？])(?:\s+(?=[A-Z0-9\u3400-\u9fff])|(?=[\u3400-\u9fff]))",
+        text,
+    )
     return [clean_space(part) for part in parts if len(clean_space(part)) >= 20]
 
 
@@ -94,7 +103,7 @@ def ensure_terminal_punctuation(text: str) -> str:
     text = clean_space(text).rstrip(",;:")
     if not text:
         return ""
-    if text[-1] in ".!?":
+    if text[-1] in ".!?。！？":
         return text
     return text + "."
 
@@ -119,23 +128,6 @@ def make_poster_sentence(text: str, max_words: int = 18) -> str:
     sentence = clean_space(text)
     if not sentence:
         return ""
-    lowered = sentence.lower()
-
-    # High-signal rule rewrites keep the claim grounded while making the output
-    # read like poster copy instead of a chopped abstract sentence.
-    if "generate both reasoning traces and task" in lowered and "actions" in lowered:
-        return "ReAct interleaves reasoning traces with task-specific actions."
-    if "large language models" in lowered and "interactive decision making" in lowered:
-        return "LLMs need better coordination between reasoning and acting."
-    if "diverse set of language and decision making tasks" in lowered:
-        return "ReAct is evaluated on language and decision-making tasks."
-    if ("hotpotqa" in lowered or "fever" in lowered) and ("hallucination" in lowered or "error propagation" in lowered):
-        return "On HotpotQA and Fever, ReAct reduces hallucination and error propagation."
-    if ("alfworld" in lowered or "webshop" in lowered) and "success rate" in lowered:
-        values = re.findall(r"\b\d+(?:\.\d+)?\s*%", sentence)
-        if values:
-            return f"On interactive benchmarks, ReAct improves success rates by {' and '.join(value.replace(' ', '') for value in values[:2])}."
-        return "ReAct improves success rates on interactive benchmarks."
 
     sentence = re.sub(r"(?i)^in this paper,\s*", "", sentence)
     sentence = re.sub(r"(?i)^we explore the use of\s+", "We use ", sentence)
@@ -155,7 +147,7 @@ def make_bullets(text: str, max_bullets: int, max_words: int = 18) -> list[str]:
 
     for sentence in sentences:
         bullet = trim_words(sentence, max_words=max_words)
-        key = re.sub(r"[^a-z0-9]", "", bullet.lower())
+        key = dedupe_key(bullet)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -178,15 +170,15 @@ def make_bullets_with_evidence(
     max_bullets: int,
     source_name: str,
     max_words: int = 18,
-) -> tuple[list[str], list[dict[str, str]]]:
+) -> tuple[list[str], list[dict[str, Any]]]:
     sentences = split_sentences(text)
     bullets: list[str] = []
-    evidence: list[dict[str, str]] = []
+    evidence: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     for sentence in sentences:
         bullet = make_poster_sentence(sentence, max_words=max_words)
-        key = re.sub(r"[^a-z0-9]", "", bullet.lower())
+        key = dedupe_key(bullet)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -248,15 +240,38 @@ def make_take_home_message(*sources: str) -> str:
 
 def label_for_result_sentence(sentence: str) -> str:
     lowered = sentence.lower()
-    if any(term in lowered for term in ["hotpotqa", "fever", "question answering", "fact verification"]):
-        return "QA / Verification"
-    if any(term in lowered for term in ["alfworld", "webshop", "interactive", "success rate"]):
-        return "Interactive Tasks"
-    if any(term in lowered for term in ["hallucination", "error propagation", "trustworthiness"]):
-        return "Reliability"
-    if any(term in lowered for term in ["benchmark", "baseline", "outperform", "performance"]):
-        return "Benchmark Result"
-    return "Key Evidence"
+    if any(term in lowered for term in ["p-value", "p value", "statistically significant", "confidence interval"]):
+        return "Statistical Result"
+    if any(term in lowered for term in ["accuracy", "precision", "recall", "f1", "auc", "error rate", "success rate"]):
+        return "Performance"
+    if "ablation" in lowered:
+        return "Ablation"
+    if any(term in lowered for term in ["benchmark", "baseline", "comparison", "outperform"]):
+        return "Comparison"
+    if any(term in lowered for term in ["qualitative", "case study", "user study"]):
+        return "Qualitative Evidence"
+    return "Key Result"
+
+
+def result_value(sentence: str) -> str:
+    values = re.findall(
+        r"\b\d+(?:\.\d+)?\s*(?:%|percentage points?|points?|pp|[x×])(?!\w)",
+        sentence,
+        flags=re.IGNORECASE,
+    )
+    if values:
+        return " / ".join(clean_space(value).replace(" ", "") for value in values[:3])
+
+    lowered = sentence.lower()
+    if re.search(r"\boutperform\w*\b", lowered):
+        return "Improvement"
+    if re.search(r"\breduc(?:e|es|ed|ing)\b", lowered):
+        return "Reduction"
+    if re.search(r"\bincreas(?:e|es|ed|ing)\b", lowered):
+        return "Increase"
+    if "statistically significant" in lowered:
+        return "Significant"
+    return "Reported"
 
 
 def make_result_callouts_with_evidence(*sources: tuple[str, str], limit: int = 3) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -271,44 +286,25 @@ def make_result_callouts_with_evidence(*sources: tuple[str, str], limit: int = 3
     for source_name, sentence in sentences:
         lowered = sentence.lower()
         if not any(marker in lowered for marker in [
-            "%", "outperform", "success rate", "accuracy", "improve", "achieve",
-            "hotpotqa", "fever", "alfworld", "webshop",
+            "%", "outperform", "success rate", "accuracy", "precision", "recall",
+            "improve", "achieve", "reduce", "increase", "significant", "ablation",
+            "baseline", "benchmark", "comparison",
         ]):
             continue
-        values = re.findall(r"\b\d+(?:\.\d+)?\s*%", sentence)
-        if values:
-            value = " / ".join(value.replace(" ", "") for value in values[:3])
-        elif any(term in lowered for term in ["hallucination", "error propagation"]):
-            value = "Less Hallucination"
-        elif any(term in lowered for term in ["hotpotqa", "fever"]):
-            value = "QA Evidence"
-        elif any(term in lowered for term in ["alfworld", "webshop"]):
-            value = "Task Evidence"
-        elif re.search(r"\boutperform\w*\b", lowered):
-            value = "Outperforms"
-        elif re.search(r"\bachiev\w*\b", lowered):
-            value = "Reported"
-        else:
-            value = "Validated"
-        if any(term in lowered for term in ["hotpotqa", "fever"]):
-            detail = "HotpotQA and Fever."
-        elif any(term in lowered for term in ["alfworld", "webshop"]):
-            detail = "ALFWorld and WebShop."
-        elif "diverse set of language and decision making tasks" in lowered:
-            detail = "Language and decision tasks."
-        else:
-            detail = make_poster_sentence(sentence, max_words=10)
-        key = clean_space(label_for_result_sentence(sentence) + value)
+        label = label_for_result_sentence(sentence)
+        value = result_value(sentence)
+        detail = make_poster_sentence(sentence, max_words=12)
+        key = clean_space(label + value + detail).casefold()
         if key in seen:
             continue
         seen.add(key)
         callouts.append({
-            "label": label_for_result_sentence(sentence),
+            "label": label,
             "value": value,
             "detail": detail,
         })
         evidence.append({
-            "claim": f"{label_for_result_sentence(sentence)}: {value}. {detail}",
+            "claim": f"{label}: {value}. {detail}",
             "source": source_name,
             "evidence_text": clean_space(sentence),
         })
@@ -335,31 +331,253 @@ def make_section(heading: str, source_text: str, limit: int, source_name: str, m
     }
 
 
-def collect_poster_claims(content: dict[str, Any]) -> list[dict[str, str]]:
-    claims: list[dict[str, str]] = []
+def merge_bboxes(boxes: list[Any]) -> list[float] | None:
+    valid: list[list[float]] = []
+    for box in boxes:
+        if not isinstance(box, list) or len(box) != 4:
+            continue
+        try:
+            valid.append([float(value) for value in box])
+        except (TypeError, ValueError):
+            continue
+    if not valid:
+        return None
+    return [
+        round(min(box[0] for box in valid), 2),
+        round(min(box[1] for box in valid), 2),
+        round(max(box[2] for box in valid), 2),
+        round(max(box[3] for box in valid), 2),
+    ]
+
+
+def quote_bbox(page: dict[str, Any], quote: str) -> list[float] | None:
+    quote_norm = normalized_evidence_text(quote)
+    lines = [line for line in page.get("lines", []) if isinstance(line, dict)]
+    if len(quote_norm) < 4 or not lines:
+        return None
+    for window_size in range(1, min(8, len(lines)) + 1):
+        for start in range(0, len(lines) - window_size + 1):
+            window = lines[start : start + window_size]
+            window_text = normalized_evidence_text(
+                " ".join(clean_space(line.get("text", "")) for line in window)
+            )
+            if quote_norm in window_text:
+                return merge_bboxes([line.get("bbox") for line in window])
+    return None
+
+
+def exact_page_source_ref(data: dict[str, Any], quote: str) -> dict[str, Any] | None:
+    quote_norm = normalized_evidence_text(quote)
+    if len(quote_norm) < 4:
+        return None
+    pages = data.get("pages", [])
+    if not isinstance(pages, list):
+        return None
+    for index, page in enumerate(pages, start=1):
+        if not isinstance(page, dict):
+            continue
+        page_text = normalized_evidence_text(page.get("text", ""))
+        line_text = normalized_evidence_text(
+            " ".join(
+                clean_space(line.get("text", ""))
+                for line in page.get("lines", [])
+                if isinstance(line, dict)
+            )
+        )
+        if quote_norm not in page_text and quote_norm not in line_text:
+            continue
+        try:
+            page_number = int(page.get("page_number", index) or index)
+        except (TypeError, ValueError):
+            page_number = index
+        ref: dict[str, Any] = {
+            "page": page_number,
+            "quote": clean_space(quote),
+            "verification_status": "verified",
+        }
+        bbox = quote_bbox(page, quote)
+        if bbox:
+            ref["bbox"] = bbox
+        return ref
+    return None
+
+
+def verified_refs_from_item(item: Any) -> list[dict[str, Any]]:
+    if not isinstance(item, dict):
+        return []
+    refs = item.get("source_refs", [])
+    if not isinstance(refs, list):
+        return []
+    return [
+        dict(ref)
+        for ref in refs
+        if isinstance(ref, dict)
+        and ref.get("verification_status") == "verified"
+        and clean_space(ref.get("quote", ""))
+    ]
+
+
+def explicit_source_refs(data: dict[str, Any], source_name: str) -> list[dict[str, Any]]:
+    canonical = {
+        "method": "methods",
+        "results": "results",
+        "result": "results",
+        "conclusions": "conclusion",
+    }.get(source_name, source_name)
+    section_names = {
+        "methods": {"method", "methods", "methodology", "approach"},
+        "results": {"result", "results", "experiments", "evaluation"},
+        "conclusion": {"conclusion", "conclusions", "discussion"},
+        "introduction": {"introduction", "background"},
+        "limitations": {"limitation", "limitations"},
+    }.get(canonical, {canonical})
+    refs: list[dict[str, Any]] = []
+
+    field_evidence = data.get("field_evidence", {})
+    if isinstance(field_evidence, dict):
+        field_item = field_evidence.get(canonical)
+        if isinstance(field_item, list):
+            for item in field_item:
+                refs.extend(verified_refs_from_item(item))
+        else:
+            refs.extend(verified_refs_from_item(field_item))
+
+    semantic = data.get("semantic_extraction", {})
+    if isinstance(semantic, dict):
+        semantic_item = semantic.get(canonical)
+        if isinstance(semantic_item, list):
+            for item in semantic_item:
+                refs.extend(verified_refs_from_item(item))
+        else:
+            refs.extend(verified_refs_from_item(semantic_item))
+
+    sections = data.get("sections", [])
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            normalized_heading = clean_space(section.get("normalized_heading", "")).casefold()
+            heading = clean_space(section.get("heading", "")).casefold()
+            if (
+                not any(name == normalized_heading or name == heading for name in section_names)
+                and not any(name in heading for name in section_names)
+            ):
+                continue
+            refs.extend(verified_refs_from_item(section))
+
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for ref in refs:
+        try:
+            page = int(ref.get("page", 0) or 0)
+        except (TypeError, ValueError):
+            page = 0
+        key = (page, normalized_evidence_text(ref.get("quote", "")))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(ref)
+    return deduplicated
+
+
+def ref_overlap_score(sentence: str, ref: dict[str, Any]) -> float:
+    sentence_tokens = {
+        token for token in re.findall(r"\w+", normalized_evidence_text(sentence)) if len(token) > 2
+    }
+    quote_tokens = {
+        token for token in re.findall(r"\w+", normalized_evidence_text(ref.get("quote", ""))) if len(token) > 2
+    }
+    if not sentence_tokens or not quote_tokens:
+        return 0.0
+    return len(sentence_tokens & quote_tokens) / max(1, len(sentence_tokens | quote_tokens))
+
+
+def enrich_evidence_record(record: dict[str, Any], data: dict[str, Any]) -> None:
+    source_text = clean_space(record.get("evidence_text", "") or record.get("text", ""))
+    source_name = clean_space(record.get("source", ""))
+    record["source_text"] = source_text
+
+    exact_ref = exact_page_source_ref(data, source_text)
+    if exact_ref:
+        refs = [exact_ref]
+        mapping = "exact_page_text"
+    else:
+        candidates = explicit_source_refs(data, source_name)
+        ranked = sorted(
+            candidates,
+            key=lambda ref: ref_overlap_score(source_text, ref),
+            reverse=True,
+        )
+        refs = ranked[:2]
+        mapping = "verified_field_reference" if refs else "unresolved"
+
+    record["source_refs"] = refs
+    record["evidence_status"] = "verified" if refs else "unresolved"
+    record["evidence_mapping"] = mapping
+    if refs:
+        record["evidence_text"] = clean_space(refs[0].get("quote", ""))
+
+
+def enrich_content_evidence(content: dict[str, Any], data: dict[str, Any]) -> None:
+    take_home = content.get("take_home_evidence")
+    if isinstance(take_home, dict):
+        enrich_evidence_record(take_home, data)
+
+    callouts = content.get("result_callout_evidence", [])
+    if isinstance(callouts, list):
+        for item in callouts:
+            if isinstance(item, dict):
+                enrich_evidence_record(item, data)
+
+    for section_key in [
+        "problem", "motivation", "core_idea", "method", "results",
+        "conclusion", "contribution", "limitations",
+    ]:
+        section = content.get(section_key)
+        if not isinstance(section, dict):
+            continue
+        evidence = section.get("evidence", [])
+        if not isinstance(evidence, list):
+            continue
+        for item in evidence:
+            if isinstance(item, dict):
+                enrich_evidence_record(item, data)
+
+
+def claim_from_evidence(claim_id: str, section: str, claim: str, evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": claim_id,
+        "section": section,
+        "claim": clean_space(claim),
+        "source": clean_space(evidence.get("source", "")),
+        "source_text": clean_space(evidence.get("source_text", "")),
+        "evidence_text": clean_space(evidence.get("evidence_text", "")),
+        "source_refs": evidence.get("source_refs", []) if isinstance(evidence.get("source_refs", []), list) else [],
+        "evidence_status": clean_space(evidence.get("evidence_status", "unresolved")) or "unresolved",
+        "evidence_mapping": clean_space(evidence.get("evidence_mapping", "unresolved")) or "unresolved",
+    }
+
+
+def collect_poster_claims(content: dict[str, Any]) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
     take_home = clean_space(content.get("take_home_message", ""))
     take_home_evidence = content.get("take_home_evidence")
     if take_home and isinstance(take_home_evidence, dict):
-        claims.append({
-            "id": "take_home_message",
-            "section": "take_home_message",
-            "claim": take_home,
-            "source": clean_space(take_home_evidence.get("source", "")),
-            "evidence_text": clean_space(take_home_evidence.get("evidence_text", "")),
-        })
+        claims.append(claim_from_evidence(
+            "take_home_message", "take_home_message", take_home, take_home_evidence
+        ))
 
     callout_evidence = content.get("result_callout_evidence", [])
     if isinstance(callout_evidence, list):
         for index, item in enumerate(callout_evidence):
             if not isinstance(item, dict):
                 continue
-            claims.append({
-                "id": f"result_callout_{index + 1}",
-                "section": "result_callouts",
-                "claim": clean_space(item.get("claim", "")),
-                "source": clean_space(item.get("source", "")),
-                "evidence_text": clean_space(item.get("evidence_text", "")),
-            })
+            claims.append(claim_from_evidence(
+                f"result_callout_{index + 1}",
+                "result_callouts",
+                clean_space(item.get("claim", "")),
+                item,
+            ))
 
     for section_key in ["problem", "motivation", "core_idea", "method", "results", "conclusion", "contribution", "limitations"]:
         section = content.get(section_key)
@@ -371,18 +589,17 @@ def collect_poster_claims(content: dict[str, Any]) -> list[dict[str, str]]:
         for index, item in enumerate(section_evidence):
             if not isinstance(item, dict):
                 continue
-            claims.append({
-                "id": f"{section_key}_{index + 1}",
-                "section": section_key,
-                "claim": clean_space(item.get("claim", "")),
-                "source": clean_space(item.get("source", "")),
-                "evidence_text": clean_space(item.get("evidence_text", "")),
-            })
+            claims.append(claim_from_evidence(
+                f"{section_key}_{index + 1}",
+                section_key,
+                clean_space(item.get("claim", "")),
+                item,
+            ))
 
     seen: set[str] = set()
-    unique: list[dict[str, str]] = []
+    unique: list[dict[str, Any]] = []
     for claim in claims:
-        key = re.sub(r"[^a-z0-9]+", "", claim.get("claim", "").lower())
+        key = dedupe_key(claim.get("claim", ""))
         if not key or key in seen:
             continue
         seen.add(key)
@@ -391,7 +608,25 @@ def collect_poster_claims(content: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def section_or_empty(data: dict[str, Any], key: str) -> str:
-    return clean_source_text(data.get(key, ""))
+    direct = clean_source_text(data.get(key, ""))
+    if direct:
+        return direct
+
+    semantic = data.get("semantic_extraction", {})
+    item = semantic.get(key) if isinstance(semantic, dict) else None
+    if isinstance(item, dict):
+        if item.get("verification_status") == "verified":
+            return clean_source_text(item.get("text", ""))
+        return ""
+    if isinstance(item, list):
+        return clean_source_text(
+            " ".join(
+                clean_space(entry.get("text", ""))
+                for entry in item
+                if isinstance(entry, dict) and entry.get("verification_status") == "verified"
+            )
+        )
+    return ""
 
 
 def first_nonempty(*values: str) -> str:
@@ -400,6 +635,14 @@ def first_nonempty(*values: str) -> str:
         if value:
             return value
     return ""
+
+
+def first_nonempty_source(*sources: tuple[str, str]) -> tuple[str, str]:
+    for source_name, source_text in sources:
+        cleaned = clean_space(source_text)
+        if cleaned:
+            return source_name, cleaned
+    return "", ""
 
 
 def looks_noisy_for_summary(text: str) -> bool:
@@ -412,12 +655,7 @@ def looks_noisy_for_summary(text: str) -> bool:
         "project page",
         "projet page",
         "work during google internship",
-        "prompt methoda",
-        "hotpotqa fever",
-        "table ",
-        "figure ",
         "we thank the support",
-        "human feedback can also be incorporated",
     ]
     if any(fragment in lowered for fragment in bad_fragments):
         return True
@@ -683,11 +921,24 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
         clean_or_empty(section_or_empty(data, "conclusion")),
     )
 
-    problem_source = first_nonempty(abstract, intro)
-    core_idea_source = first_nonempty(abstract, methods, intro)
-    method_source = first_nonempty(methods, abstract)
-    results_source = first_nonempty(results, abstract, conclusion)
-    conclusion_source = first_nonempty(conclusion, abstract)
+    problem_source_name, problem_source = first_nonempty_source(
+        ("abstract", abstract), ("introduction", intro)
+    )
+    core_idea_source_name, core_idea_source = first_nonempty_source(
+        ("abstract", abstract), ("methods", methods), ("introduction", intro)
+    )
+    method_source_name, method_source = first_nonempty_source(
+        ("methods", methods), ("abstract", abstract)
+    )
+    results_source_name, results_source = first_nonempty_source(
+        ("results", results), ("abstract", abstract), ("conclusion", conclusion)
+    )
+    conclusion_source_name, conclusion_source = first_nonempty_source(
+        ("conclusion", conclusion), ("abstract", abstract)
+    )
+    contribution_source_name, contribution_source = first_nonempty_source(
+        ("conclusion", conclusion), ("abstract", abstract)
+    )
 
     omitted_sections: list[str] = []
     for key in ["abstract", "methods", "results", "conclusion"]:
@@ -696,14 +947,14 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
 
     take_home_message, take_home_evidence = make_take_home_with_evidence(
         ("abstract", abstract),
-        ("results", results_source),
-        ("conclusion", conclusion_source),
+        (results_source_name, results_source),
+        (conclusion_source_name, conclusion_source),
         ("introduction", intro),
     )
     result_callouts, result_callout_evidence = make_result_callouts_with_evidence(
-        ("results", results_source),
+        (results_source_name, results_source),
         ("abstract", abstract),
-        ("conclusion", conclusion_source),
+        (conclusion_source_name, conclusion_source),
         limit=3,
     )
 
@@ -715,18 +966,18 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
         "take_home_evidence": take_home_evidence,
         "result_callouts": result_callouts,
         "result_callout_evidence": result_callout_evidence,
-        "problem": make_section("Problem", problem_source, SECTION_LIMITS["problem"], "abstract_or_introduction"),
+        "problem": make_section("Problem", problem_source, SECTION_LIMITS["problem"], problem_source_name),
         "motivation": make_section("Motivation", intro, 2, "introduction"),
-        "core_idea": make_section("Core Idea", core_idea_source, SECTION_LIMITS["core_idea"], "abstract_or_methods"),
-        "method": make_section("Method", method_source, SECTION_LIMITS["method"], "methods_or_abstract"),
+        "core_idea": make_section("Core Idea", core_idea_source, SECTION_LIMITS["core_idea"], core_idea_source_name),
+        "method": make_section("Method", method_source, SECTION_LIMITS["method"], method_source_name),
         "theoretical_foundation": {
             "heading": "Theory",
             "bullets": [],
             "evidence": [],
         },
-        "results": make_section("Results", results_source, SECTION_LIMITS["results"], "results_or_abstract"),
-        "conclusion": make_section("Conclusion", conclusion_source, SECTION_LIMITS["conclusion"], "conclusion_or_abstract"),
-        "contribution": make_section("Contributions", first_nonempty(conclusion, abstract), SECTION_LIMITS["contribution"], "conclusion_or_abstract"),
+        "results": make_section("Results", results_source, SECTION_LIMITS["results"], results_source_name),
+        "conclusion": make_section("Conclusion", conclusion_source, SECTION_LIMITS["conclusion"], conclusion_source_name),
+        "contribution": make_section("Contributions", contribution_source, SECTION_LIMITS["contribution"], contribution_source_name),
         "innovation": {
             "heading": "Novelty",
             "bullets": [],
@@ -755,14 +1006,35 @@ def build_poster_content(data: dict[str, Any]) -> dict[str, Any]:
     }
 
     # Fallbacks: keep the SVG from being empty when a paper has weak extraction.
-    fallback_text = first_nonempty(abstract, intro, "\n".join(str(page.get("text", "")) for page in (data.get("pages") or [])[:2]))
+    fallback_source_name, fallback_text = first_nonempty_source(
+        ("abstract", abstract),
+        ("introduction", intro),
+        ("pages", "\n".join(str(page.get("text", "")) for page in (data.get("pages") or [])[:2])),
+    )
     for key in ["problem", "core_idea", "method", "results", "conclusion", "contribution"]:
         if not content[key]["bullets"]:
-            bullets, evidence = make_bullets_with_evidence(fallback_text, 2, "fallback_text")
+            bullets, evidence = make_bullets_with_evidence(fallback_text, 2, fallback_source_name or "pages")
             content[key]["bullets"] = bullets
             content[key]["evidence"] = evidence
 
+    enrich_content_evidence(content, data)
     content["poster_claims"] = collect_poster_claims(content)
+    verified_claims = sum(
+        claim.get("evidence_status") == "verified"
+        for claim in content["poster_claims"]
+    )
+    unresolved_claims = len(content["poster_claims"]) - verified_claims
+    content["claim_evidence_summary"] = {
+        "status": "passed" if not unresolved_claims else "partial" if verified_claims else "unresolved",
+        "claim_count": len(content["poster_claims"]),
+        "verified_claim_count": verified_claims,
+        "unresolved_claim_count": unresolved_claims,
+        "source_ref_count": sum(
+            len(claim.get("source_refs", []))
+            for claim in content["poster_claims"]
+            if isinstance(claim.get("source_refs", []), list)
+        ),
+    }
 
     return content
 

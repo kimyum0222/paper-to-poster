@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from openai_response_utils import response_output_text
+
 
 def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
@@ -84,6 +86,19 @@ def normalize_claims(content: dict[str, Any], max_claims: int) -> list[dict[str,
             continue
         claim = clean_space(item.get("claim", ""))
         evidence = clean_space(item.get("evidence_text", ""))
+        source_refs = item.get("source_refs", [])
+        if not isinstance(source_refs, list):
+            source_refs = []
+        verified_refs = [
+            {
+                "page": ref.get("page"),
+                "quote": clean_space(ref.get("quote", "")),
+                "bbox": ref.get("bbox"),
+                "verification_status": ref.get("verification_status"),
+            }
+            for ref in source_refs
+            if isinstance(ref, dict) and ref.get("verification_status") == "verified"
+        ]
         if not claim:
             continue
         claims.append({
@@ -92,6 +107,9 @@ def normalize_claims(content: dict[str, Any], max_claims: int) -> list[dict[str,
             "claim": claim,
             "source": clean_space(item.get("source", "")),
             "evidence_text": evidence,
+            "source_refs": verified_refs,
+            "evidence_status": clean_space(item.get("evidence_status", "unresolved")) or "unresolved",
+            "evidence_mapping": clean_space(item.get("evidence_mapping", "unresolved")) or "unresolved",
         })
         if len(claims) >= max_claims:
             break
@@ -128,6 +146,8 @@ Return only JSON with this shape:
 
 Rules:
 - Be strict about unsupported numbers, benchmarks, methods, and causal claims.
+- Treat locally verified source_refs and their exact quotes as the strongest evidence.
+- A claim without a verified source_ref must not receive low risk, even if it sounds plausible.
 - Do not use external knowledge.
 - Do not strengthen claims beyond the evidence.
 - Prefer "partially_supported" when a claim is directionally right but too broad.
@@ -142,7 +162,7 @@ Rules:
             }
         ],
     )
-    raw_text = getattr(response, "output_text", "") or ""
+    raw_text = response_output_text(response)
     data = safe_json_object(raw_text)
     if not data:
         return {
@@ -160,11 +180,14 @@ def normalize_review_report(raw: dict[str, Any], claims: list[dict[str, Any]], m
         reviews = []
 
     normalized_reviews: list[dict[str, Any]] = []
-    claim_ids = {str(claim["id"]) for claim in claims}
+    claims_by_id = {str(claim["id"]): claim for claim in claims}
+    claim_ids = set(claims_by_id)
     for item in reviews:
         if not isinstance(item, dict):
             continue
         claim_id = clean_space(item.get("claim_id", ""))
+        if claim_id not in claim_ids:
+            continue
         status = clean_space(item.get("status", "")).lower() or "unclear"
         risk = clean_space(item.get("risk", "")).lower() or "medium"
         if status not in {"supported", "partially_supported", "unsupported", "unclear"}:
@@ -191,8 +214,37 @@ def normalize_review_report(raw: dict[str, Any], claims: list[dict[str, Any]], m
             "suggested_revision": None,
         })
 
+    for review in normalized_reviews:
+        claim = claims_by_id.get(review["claim_id"], {})
+        refs = claim.get("source_refs", [])
+        has_verified_ref = (
+            claim.get("evidence_status") == "verified"
+            and isinstance(refs, list)
+            and any(
+                isinstance(ref, dict) and ref.get("verification_status") == "verified"
+                for ref in refs
+            )
+        )
+        if has_verified_ref:
+            continue
+        claim_text = clean_space(claim.get("claim", ""))
+        high_stakes = bool(re.search(
+            r"\d|%|p[- ]?value|confidence interval|outperform|caus|significant",
+            claim_text,
+            re.IGNORECASE,
+        ))
+        review["status"] = "unclear"
+        review["risk"] = "high" if high_stakes else "medium"
+        review["support_score"] = min(float(review.get("support_score", 0.0) or 0.0), 0.25)
+        prefix = "No locally verified page-and-quote evidence is attached to this claim."
+        review["issue"] = clean_space(f"{prefix} {review.get('issue', '')}")
+
     high_risk = [review for review in normalized_reviews if review["risk"] == "high" or review["status"] == "unsupported"]
-    medium_risk = [review for review in normalized_reviews if review["risk"] == "medium" or review["status"] in {"partially_supported", "unclear"}]
+    medium_risk = [
+        review for review in normalized_reviews
+        if review not in high_risk
+        and (review["risk"] == "medium" or review["status"] in {"partially_supported", "unclear"})
+    ]
     if high_risk:
         status = "failed"
     elif medium_risk:
@@ -213,6 +265,14 @@ def normalize_review_report(raw: dict[str, Any], claims: list[dict[str, Any]], m
         "review_count": len(normalized_reviews),
         "high_risk_count": len(high_risk),
         "medium_risk_count": len(medium_risk),
+        "verified_evidence_claim_count": sum(
+            claim.get("evidence_status") == "verified" and bool(claim.get("source_refs"))
+            for claim in claims
+        ),
+        "unresolved_evidence_claim_count": sum(
+            claim.get("evidence_status") != "verified" or not claim.get("source_refs")
+            for claim in claims
+        ),
         "reviews": normalized_reviews,
         "claims": claims,
         "notes": [

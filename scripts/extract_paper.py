@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -1646,14 +1647,19 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Extract paper content into outputs/extracted_paper.json.")
+    parser = argparse.ArgumentParser(description="Extract deterministic PDF evidence into outputs/raw_pdf_extraction.json.")
     parser.add_argument("pdf_path", help="Path to one academic paper PDF.")
     parser.add_argument("--outputs-dir", default="outputs", help="Directory for generated outputs.")
+    parser.add_argument(
+        "--output-json",
+        default=None,
+        help="Raw evidence JSON path. Defaults to <outputs-dir>/raw_pdf_extraction.json.",
+    )
     args = parser.parse_args()
 
     pdf_path = Path(args.pdf_path)
     outputs_dir = Path(args.outputs_dir)
-    output_json = outputs_dir / "extracted_paper.json"
+    output_json = Path(args.output_json) if args.output_json else outputs_dir / "raw_pdf_extraction.json"
 
     if not pdf_path.exists():
         print(f"Error: PDF file does not exist: {pdf_path}", file=sys.stderr)
@@ -1682,6 +1688,8 @@ def main() -> int:
         )
         return 1
 
+    data["extraction_stage"] = "raw_pdf_evidence"
+    data["source_pdf_sha256"] = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
     write_json(output_json, data)
 
     print(f"Wrote {output_json}")

@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from openai_response_utils import response_output_text
+
 
 def clean_space(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
@@ -89,7 +91,7 @@ Do not invent claims, metrics, or results not visible in the figure/caption/cont
             }
         ],
     )
-    raw_text = getattr(response, "output_text", "") or ""
+    raw_text = response_output_text(response)
     data = safe_json_object(raw_text)
     if not data:
         data = {
