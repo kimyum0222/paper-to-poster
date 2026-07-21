@@ -82,12 +82,14 @@ Write `outputs/poster_visual_brief.json` before calling an image model. Include:
 - `style_keywords` and `avoid_keywords`;
 - `palette_direction` and contrast requirements;
 - `composition_direction` without final geometry claims;
+- `narrative_plan_linkage` with content-hash validation status;
+- `layout_requirements` with body-section count, reading order, one hero, priority, text density, bullet budget, relative area weight, and source-image placeholder ratios;
 - `source_asset_roles` with source figure IDs and intended placement roles;
 - `generated_asset_requests` with an allowed asset class for each request;
 - `prohibited_content` copied from this contract;
 - `model`, `prompt_version`, and failure/fallback notes when a call is made.
 
-Do not place claim evidence, private chain-of-thought, or unnecessary full-paper text in the visual brief.
+When `poster_narrative_plan.json` is supplied, resolve its claim IDs and figure IDs against `poster_content.json`, reject a content-hash mismatch, and keep claim text, metrics, captions, title text, and figure pixels out of the image prompt. Pass only fixed semantic section roles, structural budgets, and blank source-image slot proportions. Do not place claim evidence, private chain-of-thought, or unnecessary full-paper text in the visual brief.
 
 ## Right Code Adapter
 
@@ -120,7 +122,7 @@ The generated reference is always `style_reference_only`. Analyze its pixels loc
 ## Hybrid Rendering Workflow
 
 1. Finish extraction, semantic verification, poster content building, and the critical claim-evidence gate.
-2. Build the visual brief from verified poster content and selected source-asset roles.
+2. Validate the narrative plan against poster content, then build a content-aware but text-free visual brief from section budgets and selected source-asset roles.
 3. Generate a style reference or approved non-evidence assets when image-model art direction is enabled.
 4. Analyze the actual returned pixels and derive bounded palette tokens with contrast guards; retain deterministic defaults if analysis fails.
 5. Build `poster_design_spec.json` from those explicit rules.
