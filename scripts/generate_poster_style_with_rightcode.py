@@ -300,12 +300,25 @@ def generate_style_reference(
             sleeper=sleeper,
             clock=clock,
         )
+    layout = brief.get("layout_requirements") if isinstance(brief.get("layout_requirements"), dict) else {}
+    linkage = brief.get("narrative_plan_linkage") if isinstance(brief.get("narrative_plan_linkage"), dict) else {}
     return save_completed_result(
         final_payload,
         output_path,
         task_id or None,
         model,
-        {"size": size, "image_size": image_size, "n": 1, "async": True, "resumed": False},
+        {
+            "size": size,
+            "image_size": image_size,
+            "n": 1,
+            "async": True,
+            "resumed": False,
+            "prompt_version": brief.get("prompt_version"),
+            "content_aware_layout": bool(layout.get("validated") and linkage.get("consumed")),
+            "section_count": layout.get("section_count"),
+            "hero_section": layout.get("hero_section"),
+            "figure_slot_count": layout.get("figure_slot_count"),
+        },
         request_timeout,
         downloader,
     )

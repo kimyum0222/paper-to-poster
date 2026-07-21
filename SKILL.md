@@ -74,6 +74,7 @@ Supporting outputs:
 - `outputs/extracted_paper.json`
 - `outputs/extraction_verification.json`
 - `outputs/poster_content.json`
+- `outputs/poster_narrative_plan.json` when content-driven narrative planning is enabled.
 - `outputs/poster_design_spec.json`
 - `outputs/poster_layout.json`
 - `outputs/poster_overflow_report.json`
@@ -107,20 +108,21 @@ If `outputs/poster.svg` cannot be generated, still create the best available int
 10. Save poster content as `outputs/poster_content.json`.
 11. Require take-home, result-callout, and result-section claims to carry at least one locally verified page-and-quote reference unless the claim evidence gate is explicitly relaxed.
 12. When enabled, review poster claims against their source evidence with an OpenAI text model and save `outputs/poster_faithfulness_report.json`; stop on high-risk findings by default.
-13. When image-model art direction is enabled, build `outputs/poster_visual_brief.json`, generate only non-authoritative style references or non-evidence assets, analyze the generated reference into contrast-guarded design tokens, and follow [references/visual-generation-contract.md](references/visual-generation-contract.md).
-14. Translate only successfully analyzed visual direction into deterministic layout, typography, palette, and shape rules; then save `outputs/poster_design_spec.json`.
-15. Generate `outputs/poster.svg` with a deterministic SVG renderer using exact verified text and unchanged source figures; save `outputs/poster_layout.json`.
-16. Validate the SVG, referenced assets, layout boxes, and text overflow.
-17. Repair overflow deterministically for a bounded number of iterations. Do not report successful completion when overflow remains unless the user explicitly accepts it.
-18. When enabled, render the SVG to `outputs/poster_render_preview.png`, review the actual preview visually, apply rule-level design repairs, and re-render for a bounded number of iterations.
-19. When layout JSON aesthetic review is enabled, stop on high-risk findings by default.
-20. Write `outputs/generation_report.md` with extraction mode, model, verification, claim evidence, visual-generation roles, assumptions, omissions, quality gates, and validation results.
-21. In the final response, list generated files with `outputs/poster.svg` first and mention limitations.
+13. When content-driven narrative planning is enabled, select only verified claim IDs and source-figure IDs, plan the story arc, reading order, hero, sections, and content budgets, save `outputs/poster_narrative_plan.json`, and follow [references/narrative-planning-contract.md](references/narrative-planning-contract.md).
+14. When image-model art direction is enabled, validate and compress `outputs/poster_narrative_plan.json` into content-aware, text-free layout requirements in `outputs/poster_visual_brief.json`, generate only non-authoritative references or non-evidence assets, analyze the reference into guarded design tokens, and follow [references/visual-generation-contract.md](references/visual-generation-contract.md).
+15. Translate only successfully analyzed visual direction into deterministic layout, typography, palette, and shape rules; then save `outputs/poster_design_spec.json`.
+16. Generate `outputs/poster.svg` with a deterministic SVG renderer using exact verified text and unchanged source figures; save `outputs/poster_layout.json`.
+17. Validate the SVG, referenced assets, layout boxes, and text overflow.
+18. Repair overflow deterministically for a bounded number of iterations. Do not report successful completion when overflow remains unless the user explicitly accepts it.
+19. When enabled, render the SVG to `outputs/poster_render_preview.png`, review the actual preview visually, apply rule-level design repairs, and re-render for a bounded number of iterations.
+20. When layout JSON aesthetic review is enabled, stop on high-risk findings by default.
+21. Write `outputs/generation_report.md` with extraction mode, model, verification, claim evidence, narrative planning, visual-generation roles, assumptions, omissions, quality gates, and validation results.
+22. In the final response, list generated files with `outputs/poster.svg` first and mention limitations.
 
 Run the complete pipeline with:
 
 ```bash
-python scripts/run_pipeline.py paper.pdf --extraction-mode auto
+python scripts/run_pipeline.py paper.pdf --extraction-mode auto --narrative-planning auto
 ```
 
 Quality gates default to verified evidence for critical poster claims, high-risk semantic/aesthetic findings when those reviews are enabled, and no remaining estimated text overflow. Relax them only with the corresponding explicit CLI options when the user accepts the limitation.
@@ -414,9 +416,10 @@ Recommended script structure:
 - `scripts/verify_paper_extraction.py`: match model quotes to raw pages, derive bounding boxes, downgrade unsupported fields, and write the verification report.
 - `scripts/review_figures_with_openai.py`: optionally use an OpenAI vision model to classify figure importance, readability, and poster role.
 - `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
+- `scripts/plan_poster_narrative_with_openai.py`: select verified claim and source-figure IDs into a structured, content-driven poster narrative plan.
 - `scripts/review_poster_faithfulness_with_openai.py`: optionally use an OpenAI text model to check poster claims against source evidence.
 - `scripts/review_poster_aesthetics_with_openai.py`: optionally use an OpenAI text model to review layout aesthetics from structured JSON.
-- `scripts/build_poster_visual_brief.py`: build a safe style-only prompt and validated deterministic design tokens.
+- `scripts/build_poster_visual_brief.py`: validate the narrative plan and build a content-aware, text-free layout prompt plus safe deterministic design tokens.
 - `scripts/generate_poster_style_with_rightcode.py`: submit, resume, and poll Right Code asynchronous image tasks without embedding the reference raster or duplicating timed-out jobs.
 - `scripts/analyze_poster_style_reference.py`: derive a bounded color palette from the returned image pixels with contrast guards and no scientific-content influence.
 - `scripts/build_poster_design.py`: build `outputs/poster_design_spec.json` with template, hierarchy, grid, typography, palette, density, and overflow parameters.
@@ -447,6 +450,7 @@ Before finishing, confirm or report:
 - Text inside nested components such as result callout boxes should stay inside `component_bounding_boxes`, not just inside the larger parent section.
 - When semantic review is enabled, poster claims are reviewed against extracted source evidence and reported in `outputs/poster_faithfulness_report.json`.
 - Critical take-home and result claims have locally verified page-and-quote evidence, or the generation report explicitly records that the evidence gate was relaxed.
+- When narrative planning and image art direction are enabled together, the Visual Brief validates the content hash, consumes only verified claim IDs, and represents source figures only as aspect-ratio-matched blank slots.
 - High-risk faithfulness or aesthetic review findings stop the pipeline by default when those reviews are enabled.
 - Remaining text overflow after bounded repair stops the pipeline by default; `--allow-overflow` is an explicit acceptance of that limitation.
 - Any generated asset is classified as non-evidence and does not replace, redraw, or modify a source figure.

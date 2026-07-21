@@ -93,6 +93,14 @@ def write_generation_report(
     faithfulness_report = read_json(outputs_dir / "poster_faithfulness_report.json")
     repair_report = read_json(outputs_dir / "layout_repair_report.json")
     aesthetic_report = read_json(outputs_dir / "poster_aesthetic_report.json")
+    narrative_results = [
+        result for result in step_results
+        if isinstance(result.get("command"), list)
+        and "scripts/plan_poster_narrative_with_openai.py" in result.get("command", [])
+    ]
+    narrative_requested = bool(narrative_results)
+    narrative_completed = any(result.get("returncode") == 0 for result in narrative_results)
+    narrative_plan = read_json(outputs_dir / "poster_narrative_plan.json") if narrative_completed else {}
     visual_requested = any(
         "scripts/build_poster_visual_brief.py" in result.get("command", [])
         for result in step_results
@@ -121,6 +129,8 @@ def write_generation_report(
         "poster_aesthetic_report.json",
         "generation_report.md",
     ]
+    if narrative_completed:
+        generated_files.append("poster_narrative_plan.json")
     if visual_requested:
         generated_files.extend([
             "poster_visual_brief.json",
@@ -195,6 +205,26 @@ def write_generation_report(
     ])
     report.extend(figure_lines or ["- No usable figures were selected."])
 
+    if narrative_requested:
+        claim_summary = narrative_plan.get("claim_selection_summary") or {}
+        report.extend([
+            "",
+            "## Content-Driven Narrative Planning",
+            "",
+            f"- Status: {narrative_plan.get('status', 'failed')}",
+            f"- Method: {narrative_plan.get('planning_method', 'unknown')}",
+            f"- Model: {narrative_plan.get('model') or 'not used'}",
+            f"- Paper type: {narrative_plan.get('paper_type', 'unknown')}",
+            f"- Story arc: {narrative_plan.get('story_arc', 'unknown')}",
+            f"- Hero section: {narrative_plan.get('hero_section', 'unknown')}",
+            f"- Reading order: {', '.join(narrative_plan.get('reading_order', []) or []) or 'not available'}",
+            f"- Planned sections: {len(narrative_plan.get('sections', []) or [])}",
+            f"- Selected verified claims: {claim_summary.get('selected_verified_claim_count', 0)} of {claim_summary.get('available_verified_claim_count', 0)}",
+            f"- Core source figures: {', '.join(narrative_plan.get('core_figure_ids', []) or []) or 'none'}",
+            f"- Consumed by Visual Brief: {bool((visual_brief.get('narrative_plan_linkage') or {}).get('consumed'))}",
+            "- The plan can constrain the text-free image reference; final SVG geometry still remains deterministic.",
+        ])
+
     omitted = content.get("omitted_sections", [])
     report.extend([
         "",
@@ -207,6 +237,8 @@ def write_generation_report(
         "- SVG images are embedded as data URIs when local assets can be read.",
     ])
     if visual_requested:
+        visual_linkage = visual_brief.get("narrative_plan_linkage") or {}
+        layout_requirements = visual_brief.get("layout_requirements") or {}
         report.extend([
             "",
             "## Image-Model Art Direction",
@@ -214,6 +246,12 @@ def write_generation_report(
             f"- Status: {visual_brief.get('status', visual_generation.get('status', 'unknown'))}",
             f"- Provider: {visual_brief.get('provider', visual_generation.get('provider', 'rightcode'))}",
             f"- Model: {visual_brief.get('model', visual_generation.get('model', 'unknown'))}",
+            f"- Prompt version: {visual_brief.get('prompt_version', 'unknown')}",
+            f"- Narrative plan consumed: {visual_linkage.get('consumed', False)}",
+            f"- Narrative-layout validation: {visual_linkage.get('validation_status', 'not provided')}",
+            f"- Planned body zones: {layout_requirements.get('section_count', 'not constrained')}",
+            f"- Planned hero zone: {layout_requirements.get('hero_section', 'not constrained')}",
+            f"- Planned source-image slots: {layout_requirements.get('figure_slot_count', 'not constrained')}",
             f"- Provider task ID: {visual_generation.get('task_id', 'not recorded')}",
             f"- Existing task resumable: {visual_generation.get('resumable', False)}",
             f"- Generated asset class: {visual_generation.get('asset_class', 'style_reference_only')}",
@@ -314,6 +352,17 @@ def main() -> int:
     parser.add_argument("--use-faithfulness-review", action="store_true", help="Use an OpenAI text model to review poster claims against source evidence.")
     parser.add_argument("--faithfulness-model", default=None, help="OpenAI model for --use-faithfulness-review.")
     parser.add_argument(
+        "--narrative-planning",
+        choices=["off", "auto", "model", "local"],
+        default="off",
+        help="Plan poster sections from verified claim and source-figure IDs. auto uses a model when configured and otherwise falls back locally.",
+    )
+    parser.add_argument(
+        "--narrative-model",
+        default=None,
+        help="OpenAI-compatible text model for poster narrative planning; defaults to --extraction-model when supplied.",
+    )
+    parser.add_argument(
         "--claim-evidence-gate",
         choices=["off", "critical", "all"],
         default="critical",
@@ -371,6 +420,7 @@ def main() -> int:
     extracted_json = outputs_dir / "extracted_paper.json"
     verification_json = outputs_dir / "extraction_verification.json"
     content_json = outputs_dir / "poster_content.json"
+    narrative_plan_json = outputs_dir / "poster_narrative_plan.json"
     visual_brief_json = outputs_dir / "poster_visual_brief.json"
     visual_generation_json = outputs_dir / "poster_visual_generation.json"
     style_analysis_json = outputs_dir / "poster_style_analysis.json"
@@ -448,6 +498,23 @@ def main() -> int:
         if args.faithfulness_model:
             faithfulness_step.extend(["--model", args.faithfulness_model])
         steps.append(faithfulness_step)
+    if args.narrative_planning != "off":
+        narrative_step = [
+            python,
+            "scripts/plan_poster_narrative_with_openai.py",
+            "--content-json",
+            str(content_json),
+            "--extracted-json",
+            str(extracted_json),
+            "--output-json",
+            str(narrative_plan_json),
+            "--mode",
+            args.narrative_planning,
+        ]
+        narrative_model = args.narrative_model or args.extraction_model
+        if narrative_model:
+            narrative_step.extend(["--model", narrative_model])
+        steps.append(narrative_step)
     if args.image_art_direction != "off":
         visual_brief_step = [
             python,
@@ -459,6 +526,8 @@ def main() -> int:
             "--style-reference-path",
             str(style_reference_path),
         ]
+        if args.narrative_planning != "off":
+            visual_brief_step.extend(["--narrative-plan-json", str(narrative_plan_json)])
         visual_generation_step = [
             python,
             "scripts/generate_poster_style_with_rightcode.py",
