@@ -10,12 +10,13 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from poster_typesetting import configure_measurement_font, estimate_text_width
+
 
 XLINK_NS = "{http://www.w3.org/1999/xlink}"
 REMOTE_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 CSS_REMOTE_URL_RE = re.compile(r"url\(\s*['\"]?https?://", re.IGNORECASE)
 CSS_IMPORT_RE = re.compile(r"@import\s+['\"]?https?://", re.IGNORECASE)
-TEXT_WIDTH_FACTOR = 0.52
 TEXT_OVERFLOW_TOLERANCE = 2.0
 
 
@@ -52,10 +53,6 @@ def parse_number(value: str | None) -> float | None:
     if not match:
         return None
     return float(match.group(1))
-
-
-def estimate_text_width(text: str, font_size: float) -> float:
-    return len(re.sub(r"\s+", " ", text).strip()) * font_size * TEXT_WIDTH_FACTOR
 
 
 def parse_viewbox(value: str | None) -> tuple[float, float, float, float] | None:
@@ -130,6 +127,9 @@ def load_layout_boxes(layout_path: Path) -> tuple[dict[str, tuple[float, float, 
     except json.JSONDecodeError as exc:
         errors.append(f"Layout JSON parse error: {exc}")
         return boxes, errors, warnings
+
+    font_metrics = layout.get("font_metrics") if isinstance(layout.get("font_metrics"), dict) else {}
+    configure_measurement_font(font_metrics.get("resolved_font_path"))
 
     boxes_raw = layout.get("section_bounding_boxes")
     component_boxes_raw = layout.get("component_bounding_boxes")

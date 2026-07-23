@@ -36,8 +36,6 @@ Do not prioritize decorative complexity, full-paper completeness, or unsupported
 
 ## Inputs
 
-Expected input:
-
 - One academic paper PDF.
 
 Optional inputs:
@@ -83,21 +81,26 @@ Supporting outputs:
 - `outputs/poster_aesthetic_report.json` when layout JSON aesthetic review is enabled.
 - `outputs/poster_visual_brief.json` when image-model art direction is enabled.
 - `outputs/poster_visual_generation.json` with provider status and the generated asset manifest.
-- `outputs/poster_style_analysis.json` with contrast-guarded design tokens derived from the generated reference pixels.
+- `outputs/poster_style_analysis.json` with contrast-guarded palette and bounded spatial design tokens derived from the generated reference pixels.
+- `outputs/poster_reference_vision_analysis.json` when a multimodal model classifies reference design semantics without retaining visible text.
 - `outputs/poster_style_reference.png` when an image model produces a non-authoritative visual reference.
-- `outputs/poster_render_preview.png` and `outputs/poster_visual_review.json` when rendered-poster visual review is enabled.
+- `outputs/poster_decorative_vectors.json` when VTracer decoration extraction is enabled.
+- `outputs/poster_typesetting_manifest.json` with verified text, resolved font metadata, measured widths, and renderer-consumed wrapping decisions.
+- `outputs/poster_style_conformance_report.json` checking that analyzed style tokens reached executable SVG geometry; this is not pixel similarity.
+- `outputs/poster_render_preview.png` when image-model art direction is enabled.
+- `outputs/poster_visual_review.json` when a multimodal model actually compares the reference and rendered preview.
+- `outputs/poster_visual_repair_report.json` when allowlisted preview-review patches are tested as a candidate design.
+- `outputs/run_manifest.json` with source hash, output ownership, timestamps, and run status.
 - `outputs/generation_report.md`
 - `outputs/assets/` for extracted figures, tables, diagrams, icons, or intermediate local assets.
 - `outputs/assets/generated/` for generated decorative or explanatory assets that are explicitly classified as non-evidence.
 
-Prefer making `outputs/poster.svg` self-contained by embedding required images as data URIs. If assets are too large to embed, store them under `outputs/assets/`, reference them with relative paths only, and report that in `outputs/generation_report.md`.
-
-If `outputs/poster.svg` cannot be generated, still create the best available intermediate outputs and explain the blocking issue in `outputs/generation_report.md`.
+Prefer making `outputs/poster.svg` self-contained by embedding required images as data URIs. If assets are too large to embed, store them under `outputs/assets/`, reference them with relative paths only, and report that in `outputs/generation_report.md`. If the SVG cannot be generated, create the best available intermediate outputs and explain the blocker there.
 
 ## Workflow
 
 1. Locate the user-provided PDF.
-2. Create `outputs/` and `outputs/assets/` if needed.
+2. Create or verify `outputs/`; refuse to mix different paper hashes unless `--fresh-output` or a different output directory is selected.
 3. Extract deterministic page text, lines, blocks, coordinates, figures, tables, captions, metadata, and hashes with local PDF tools.
 4. Save this immutable evidence layer as `outputs/raw_pdf_extraction.json`.
 5. In `auto` or `model` mode, structure the paper semantically with a model. Send the original PDF as a multimodal file input to the official OpenAI endpoint. For a custom OpenAI-compatible Base URL, send page-numbered deterministic PDF text unless direct PDF input is explicitly selected and supported. Use `auto` by default; fall back to local extraction when the API is unavailable.
@@ -109,13 +112,14 @@ If `outputs/poster.svg` cannot be generated, still create the best available int
 11. Require take-home, result-callout, and result-section claims to carry at least one locally verified page-and-quote reference unless the claim evidence gate is explicitly relaxed.
 12. When enabled, review poster claims against their source evidence with an OpenAI text model and save `outputs/poster_faithfulness_report.json`; stop on high-risk findings by default.
 13. When content-driven narrative planning is enabled, select only verified claim IDs and source-figure IDs, plan the story arc, reading order, hero, sections, and content budgets, save `outputs/poster_narrative_plan.json`, and follow [references/narrative-planning-contract.md](references/narrative-planning-contract.md).
-14. When image-model art direction is enabled, validate and compress `outputs/poster_narrative_plan.json` into content-aware, text-free layout requirements in `outputs/poster_visual_brief.json`, generate only non-authoritative references or non-evidence assets, analyze the reference into guarded design tokens, and follow [references/visual-generation-contract.md](references/visual-generation-contract.md).
-15. Translate only successfully analyzed visual direction into deterministic layout, typography, palette, and shape rules; then save `outputs/poster_design_spec.json`.
-16. Generate `outputs/poster.svg` with a deterministic SVG renderer using exact verified text and unchanged source figures; save `outputs/poster_layout.json`.
+14. When image-model art direction is enabled, validate and compress `outputs/poster_narrative_plan.json` into content-aware, text-free layout requirements in `outputs/poster_visual_brief.json`, generate only non-authoritative references or non-evidence assets, analyze the reference into guarded palette and spatial design tokens, and follow [references/visual-generation-contract.md](references/visual-generation-contract.md). Optionally add multimodal semantic classification after hash-matched local pixel analysis; retain no visible text and accept only allowlisted categorical style adjustments.
+15. Translate only successfully analyzed, hash-matched visual direction into deterministic layout, typography, palette, section coordinates, source-figure slots, and shape rules; optionally use VTracer only on isolated non-scientific decorative crops; then save `outputs/poster_design_spec.json`. Map section identities only from the validated narrative plan, never from text-like pixels in the reference.
+    Require one confidently detected content panel per validated narrative section before applying reference geometry. Preserve detected cross-row and cross-column spans; do not silently replace failed panel detection with an equal-column grid while reporting success.
+16. Resolve one local font, create the typesetting manifest, and generate `outputs/poster.svg` from those exact verified wrapping decisions and unchanged source figures; save `outputs/poster_layout.json`.
 17. Validate the SVG, referenced assets, layout boxes, and text overflow.
 18. Repair overflow deterministically for a bounded number of iterations. Do not report successful completion when overflow remains unless the user explicitly accepts it.
-19. When enabled, render the SVG to `outputs/poster_render_preview.png`, review the actual preview visually, apply rule-level design repairs, and re-render for a bounded number of iterations.
-20. When layout JSON aesthetic review is enabled, stop on high-risk findings by default.
+19. When image art direction is enabled, render the SVG to `outputs/poster_render_preview.png`; inspect it visually before delivery. When multimodal preview review is explicitly enabled, compare reference and preview without retaining visible text, accept only bounded design-parameter patches, validate a candidate SVG, and replace the final files only when the candidate passes. The style-conformance report still checks token execution rather than pixel similarity.
+20. When layout JSON aesthetic review is enabled, stop on high-risk structured-layout findings by default.
 21. Write `outputs/generation_report.md` with extraction mode, model, verification, claim evidence, narrative planning, visual-generation roles, assumptions, omissions, quality gates, and validation results.
 22. In the final response, list generated files with `outputs/poster.svg` first and mention limitations.
 
@@ -124,6 +128,8 @@ Run the complete pipeline with:
 ```bash
 python scripts/run_pipeline.py paper.pdf --extraction-mode auto --narrative-planning auto
 ```
+
+Use `--fresh-output` when intentionally replacing artifacts from a different paper. The pipeline records the source hash in `outputs/run_manifest.json` and otherwise refuses cross-paper reuse.
 
 Quality gates default to verified evidence for critical poster claims, high-risk semantic/aesthetic findings when those reviews are enabled, and no remaining estimated text overflow. Relax them only with the corresponding explicit CLI options when the user accepts the limitation.
 
@@ -143,142 +149,9 @@ Read [references/extraction-contract.md](references/extraction-contract.md) when
 
 ## Structured Content
 
-`outputs/raw_pdf_extraction.json` is the immutable evidence layer. Preserve source PDF hash, raw pages, lines, blocks, coordinates, figures, tables, captions, metadata, extraction quality, and tool notes.
+Treat `outputs/raw_pdf_extraction.json` as the immutable evidence layer. Carry verified page, exact quote, bbox, source-figure metadata, and source hashes through poster content and final validation. Follow [references/extraction-contract.md](references/extraction-contract.md) for extraction and evidence schemas, [references/narrative-planning-contract.md](references/narrative-planning-contract.md) for claim/figure selection, and [references/visual-generation-contract.md](references/visual-generation-contract.md) for design, layout, generated assets, and rendering boundaries.
 
-`outputs/extracted_paper.json` should preserve source material and enough context to support poster claims. Include these fields when available:
-
-- `title`
-- `title_candidates`
-- `title_confidence`
-- `authors`
-- `affiliations`
-- `abstract`
-- `section_headings`
-- `sections`
-- `methods`
-- `results`
-- `conclusion`
-- `figures`
-- `tables`
-- `captions`
-- `references_or_citation_metadata`
-- `text_extraction_quality`
-- `extraction_notes`
-- `pages`
-- `field_evidence`
-- `semantic_extraction`
-- `extraction_method`
-- `extraction_model`
-- `extraction_verification`
-
-Each non-empty model-derived field should include `source_refs` with `page`, exact `quote`, local `verification_status`, and derived `bbox` when available. Keep top-level strings and lists compatible with the deterministic content builder.
-
-`outputs/extraction_verification.json` should report verified and unverified field counts, per-field statuses, model metadata, and critical fields replaced with deterministic local values.
-
-For text extraction, prefer layout-aware records when available:
-
-- `pages[].text` for page-level reading-order text.
-- `pages[].lines` for line text with page number, bounding box, font size, bold flag, reading order, and column hint.
-- `pages[].blocks` for source layout blocks.
-- `sections[]` for structured paper sections with heading, normalized heading, page range, text, line count, and confidence.
-- `text_extraction_quality` for character count, pages with text, detected column mode, section count, missing required sections, title confidence, and likely cover-page/template signals.
-
-For figure extraction, preserve enough metadata for selection and faithful placement:
-
-- `figures[].kind` as `raster_xref`, `page_crop`, or another explicit extraction mode.
-- `figures[].asset_path`, `page`, `bbox`, `width_px`, `height_px`, and `area_ratio`.
-- `figures[].caption`, `caption_id`, `caption_bbox`, and `caption_confidence` when matched.
-- `figures[].quality_score` and `selection_reason` for downstream figure prioritization.
-- When visual model review is available, record figure judgments under `figure_reviews` with `figure_id`, `role`, `importance_score`, `readability_score`, and `selection_reason`; scripts should fall back to caption/layout heuristics when no visual review is available.
-
-`outputs/poster_content.json` should contain concise poster-ready sections. Use these sections when supported by the paper:
-
-- `title`
-- `authors`
-- `affiliations`
-- `take_home_message`
-- `take_home_evidence`
-- `result_callouts`
-- `result_callout_evidence`
-- `poster_claims`
-- `problem`
-- `motivation`
-- `core_idea`
-- `method`
-- `theoretical_foundation`
-- `results`
-- `conclusion`
-- `contribution`
-- `innovation`
-- `significance`
-- `limitations`
-- `figures_to_use`
-- `figure_candidates`
-- `figure_selection_policy`
-- `footer_metadata`
-- `omitted_sections`
-
-Each poster claim, bullet, and callout should preserve source evidence when available. Prefer adding `evidence` arrays next to rendered bullet lists instead of replacing the bullet strings, so deterministic renderers remain simple while faithfulness review can audit each claim.
-
-Each entry in `poster_claims` should include:
-
-- `id`
-- `section`
-- `claim`
-- `source`
-- `source_text`
-- `evidence_text`
-- `source_refs` with locally verified `page`, exact `quote`, and `bbox` when available
-- `evidence_status`
-- `evidence_mapping`
-
-`claim_evidence_summary` should report verified and unresolved poster claim counts. Critical claims without verified page-and-quote evidence fail the default pipeline quality gate.
-
-`outputs/poster_faithfulness_report.json`, when produced, should include:
-
-- `status`
-- `model`
-- `summary`
-- `claim_count`
-- `review_count`
-- `high_risk_count`
-- `medium_risk_count`
-- `reviews`
-- `claims`
-
-`outputs/poster_layout.json` should describe layout decisions in the same coordinate system as the SVG `viewBox`:
-
-- `canvas_width`
-- `canvas_height`
-- `viewBox`
-- `column_count`
-- `margin`
-- `gutter`
-- `section_order`
-- `section_bounding_boxes`
-- `component_bounding_boxes`
-- `typography_scale`
-- `figure_placements`
-- `color_tokens`
-- `overflow_handling_decisions`
-- `asset_embedding_mode`
-
-`outputs/poster_design_spec.json` should describe the intended poster design before rendering:
-
-- `template`
-- `theme`
-- `hero_message`
-- `callouts`
-- `canvas`
-- `grid`
-- `visual_hierarchy`
-- `typography`
-- `color_palette`
-- `card_style`
-- `card_variants`
-- `image_placement`
-- `section_density`
-- `overflow_rules`
+Critical claims without locally verified page-and-quote evidence fail the default quality gate. Keep generated visual assets non-evidentiary and preserve source figures unchanged.
 
 ## Poster Structure
 
@@ -340,6 +213,16 @@ Avoid figures that are unreadable, purely decorative, duplicated, or not referen
 ## Optional Image-Model Art Direction
 
 Use an image model as a visual director, not as the authoritative renderer. Let it propose composition, palette, background motifs, card language, and clearly non-evidentiary explanatory artwork. Keep final text, numbers, citations, source figures, charts, tables, and geometry under deterministic SVG control.
+
+Use a multimodal model only as an optional semantic analyzer or rendered-preview reviewer. Keep local pixel measurements authoritative for coordinates. Discard model-returned visible text, arbitrary geometry, colors, SVG code, content changes, and source-figure edits; apply only locally allowlisted and bounded style parameters through a candidate SVG that must pass validation.
+
+Treat preview review as a separate privacy decision: it sends the rendered poster image, including visible verified text and source figures, to the configured multimodal provider. Enable it only when the user authorizes that disclosure. The normalized local report retains no transcribed visible text.
+
+Enable both guarded multimodal stages only when the user accepts the additional model calls:
+
+```bash
+python scripts/run_pipeline.py paper.pdf --extraction-mode auto --narrative-planning auto --image-art-direction required --reference-vision-analysis auto --preview-vision-review auto --poster-vision-model <vision-model>
+```
 
 Never use a generated full-poster raster as `outputs/poster.svg` or as a full-canvas image inside it. Treat `poster_style_reference.png` as design guidance only. Read [references/visual-generation-contract.md](references/visual-generation-contract.md) before enabling, implementing, or evaluating this stage.
 
@@ -406,29 +289,9 @@ If extraction is incomplete:
 
 ## Scripts
 
-This skill can work without scripts, but prefer local scripts when available for repeatable extraction, generation, and validation.
+Use `scripts/run_pipeline.py` for the complete workflow. It invokes the bundled extraction, semantic verification, narrative, visual-reference, optional multimodal guidance, VTracer, design, typesetting, SVG, repair, preview, conformance, and validation stages with absolute script paths. Multimodal guidance is off by default; enable it explicitly with `--reference-vision-analysis` and/or `--preview-vision-review`. Use individual scripts only when debugging a recorded stage.
 
-Recommended script structure:
-
-- `scripts/run_pipeline.py`: run the complete extraction, verification, content, design, rendering, repair, and validation workflow.
-- `scripts/extract_paper.py`: write deterministic text, layout, metadata, figures, tables, captions, and hashes to `raw_pdf_extraction.json`.
-- `scripts/structure_paper_with_openai.py`: interpret the original PDF with multimodal file input and structured output while preserving local evidence.
-- `scripts/verify_paper_extraction.py`: match model quotes to raw pages, derive bounding boxes, downgrade unsupported fields, and write the verification report.
-- `scripts/review_figures_with_openai.py`: optionally use an OpenAI vision model to classify figure importance, readability, and poster role.
-- `scripts/build_poster_content.py`: map extracted content into semantic poster sections.
-- `scripts/plan_poster_narrative_with_openai.py`: select verified claim and source-figure IDs into a structured, content-driven poster narrative plan.
-- `scripts/review_poster_faithfulness_with_openai.py`: optionally use an OpenAI text model to check poster claims against source evidence.
-- `scripts/review_poster_aesthetics_with_openai.py`: optionally use an OpenAI text model to review layout aesthetics from structured JSON.
-- `scripts/build_poster_visual_brief.py`: validate the narrative plan and build a content-aware, text-free layout prompt plus safe deterministic design tokens.
-- `scripts/generate_poster_style_with_rightcode.py`: submit, resume, and poll Right Code asynchronous image tasks without embedding the reference raster or duplicating timed-out jobs.
-- `scripts/analyze_poster_style_reference.py`: derive a bounded color palette from the returned image pixels with contrast guards and no scientific-content influence.
-- `scripts/build_poster_design.py`: build `outputs/poster_design_spec.json` with template, hierarchy, grid, typography, palette, density, and overflow parameters.
-- `scripts/build_poster_svg.py`: generate `outputs/poster.svg` from poster content and design spec.
-- `scripts/repair_poster_layout.py`: deterministically adjust design parameters after overflow validation and before re-rendering.
-- `scripts/validate_svg.py`: check XML validity, missing assets, canvas metadata, unsupported SVG features, remote dependencies, basic layout issues, and estimated text overflow per block.
-
-Scripts should write outputs only under `outputs/` unless the user requests otherwise.
-
+Install required local dependencies from `requirements.txt`; install `requirements-optional.txt` only for model-backed or VTracer stages and only with user approval. Scripts should write outputs only under the selected output directory.
 
 ## Validation
 
@@ -454,31 +317,13 @@ Before finishing, confirm or report:
 - High-risk faithfulness or aesthetic review findings stop the pipeline by default when those reviews are enabled.
 - Remaining text overflow after bounded repair stops the pipeline by default; `--allow-overflow` is an explicit acceptance of that limitation.
 - Any generated asset is classified as non-evidence and does not replace, redraw, or modify a source figure.
-- When visual review is enabled, it examines a rendered preview of the final SVG rather than layout JSON alone.
+- When a rendered preview is produced, inspect that image before delivery rather than treating layout JSON or the style-conformance score as visual proof.
+- When multimodal visual guidance is enabled, verify reference/preview hashes, confirm that reports retain no visible text, and accept a repaired candidate only after SVG and overflow validation pass.
 - The final poster remains deterministic editable SVG text and geometry, not a generated full-poster raster.
 - Figures, tables, captions, and claims remain faithful to the paper.
 - Omitted or unavailable sections are reported in `outputs/generation_report.md`.
 
-When no validation script exists, run a basic XML and dependency check equivalent to:
-
-```bash
-python - <<'PY'
-from pathlib import Path
-import re
-import xml.etree.ElementTree as ET
-
-svg_path = Path('outputs/poster.svg')
-assert svg_path.exists(), 'outputs/poster.svg does not exist'
-text = svg_path.read_text(encoding='utf-8')
-ET.fromstring(text)
-assert '<svg' in text and 'viewBox' in text, 'missing SVG root or viewBox'
-assert '<script' not in text.lower(), 'SVG contains script element'
-assert not re.search(r'https?://', text), 'SVG contains remote URL'
-print('SVG basic validation passed')
-PY
-```
-
-If validation cannot be run, explain why in `outputs/generation_report.md`.
+Run the bundled validator. If validation cannot run, explain why in `outputs/generation_report.md` instead of claiming success.
 
 ## Final Response
 

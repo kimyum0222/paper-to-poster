@@ -28,10 +28,39 @@ JsonRequester = Callable[[str, str, str, dict[str, Any] | None, float], dict[str
 ByteDownloader = Callable[[str, float], bytes]
 
 
+class RightCodeStageError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        endpoint: str,
+        task_id: str | None = None,
+        submission_outcome: str = "not_attempted",
+        safe_to_retry: bool = False,
+        recommended_action: str = "",
+    ) -> None:
+        self.stage = stage
+        self.endpoint = endpoint
+        self.task_id = task_id
+        self.submission_outcome = submission_outcome
+        self.safe_to_retry = safe_to_retry
+        self.recommended_action = recommended_action
+        super().__init__(message)
+
+
 class ImageTaskTimeout(TimeoutError):
     def __init__(self, task_id: str, timeout_seconds: float) -> None:
         self.task_id = task_id
         self.timeout_seconds = timeout_seconds
+        self.stage = "get_status"
+        self.endpoint = ""
+        self.submission_outcome = "accepted"
+        self.safe_to_retry = True
+        self.recommended_action = (
+            f"Resume task {task_id} with --resume-task-id and a longer --timeout-seconds value; "
+            "do not submit a new task."
+        )
         super().__init__(
             f"Right Code image task {task_id} did not complete within {timeout_seconds:g} seconds"
         )
@@ -62,6 +91,47 @@ def validate_https_base_url(value: str, name: str) -> str:
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError(f"{name} must be an absolute https URL")
     return url
+
+
+def endpoint_without_query(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+
+def retry_transient(
+    operation: Callable[[], Any],
+    *,
+    attempts: int,
+    stage: str,
+    endpoint: str,
+    task_id: str | None,
+    submission_outcome: str,
+    sleeper: Callable[[float], None],
+    backoff_seconds: float,
+) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            last_error = exc
+            if attempt < max(1, attempts):
+                sleeper(backoff_seconds * attempt)
+    assert last_error is not None
+    action = (
+        f"Resume task {task_id} with --resume-task-id; no new submission is required."
+        if task_id
+        else "Retry this non-billable operation after checking provider availability."
+    )
+    raise RightCodeStageError(
+        f"Right Code {stage} failed after {max(1, attempts)} attempt(s): {clean_space(last_error)}",
+        stage=stage,
+        endpoint=endpoint_without_query(endpoint),
+        task_id=task_id,
+        submission_outcome=submission_outcome,
+        safe_to_retry=True,
+        recommended_action=action,
+    ) from last_error
 
 
 def api_error_message(payload: Any) -> str:
@@ -122,8 +192,10 @@ def download_bytes(url: str, timeout: float) -> bytes:
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = response.read(MAX_IMAGE_BYTES + 1)
-    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-        raise RuntimeError(f"Could not download generated image: {clean_space(exc)}") from exc
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Could not download generated image: HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not download generated image: {clean_space(exc.reason)}") from exc
     if len(data) > MAX_IMAGE_BYTES:
         raise RuntimeError("Generated image exceeds the 25 MB safety limit")
     return data
@@ -193,28 +265,57 @@ def poll_for_result(
     requester: JsonRequester,
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    max_get_attempts: int = 3,
+    retry_backoff_seconds: float = 1.0,
 ) -> dict[str, Any]:
     encoded_task_id = urllib.parse.quote(task_id, safe="")
     task_url = f"{task_base_url}/tasks/{encoded_task_id}"
     deadline = clock() + timeout_seconds
     last_progress: Any = None
     while clock() < deadline:
-        payload = requester("GET", task_url, api_key, None, request_timeout)
+        payload = retry_transient(
+            lambda: requester("GET", task_url, api_key, None, request_timeout),
+            attempts=max_get_attempts,
+            stage="get_status",
+            endpoint=task_url,
+            task_id=task_id,
+            submission_outcome="accepted",
+            sleeper=sleeper,
+            backoff_seconds=retry_backoff_seconds,
+        )
         record = image_record(payload)
         if record:
             return payload
         normalized = unwrap_result(payload)
         status = clean_space(normalized.get("status")).lower()
         if status == "failed":
-            raise RuntimeError(f"Right Code image task failed: {api_error_message(normalized)}")
+            raise RightCodeStageError(
+                f"Right Code image task failed: {api_error_message(normalized)}",
+                stage="get_status",
+                endpoint=endpoint_without_query(task_url),
+                task_id=task_id,
+                submission_outcome="accepted",
+                safe_to_retry=False,
+                recommended_action="Inspect the failed provider task; do not resume or resubmit without reviewing the provider error.",
+            )
         if status in {"cancelled", "canceled", "expired"}:
-            raise RuntimeError(f"Right Code image task ended with status {status}")
+            raise RightCodeStageError(
+                f"Right Code image task ended with status {status}",
+                stage="get_status",
+                endpoint=endpoint_without_query(task_url),
+                task_id=task_id,
+                submission_outcome="accepted",
+                safe_to_retry=False,
+                recommended_action=f"Inspect the provider task that ended with status {status} before deciding whether to submit again.",
+            )
         progress = normalized.get("progress")
         if progress != last_progress:
             print(f"Right Code image task {task_id}: {status or 'processing'} ({progress if progress is not None else '?'}%)", flush=True)
             last_progress = progress
         sleeper(poll_interval)
-    raise ImageTaskTimeout(task_id, timeout_seconds)
+    error = ImageTaskTimeout(task_id, timeout_seconds)
+    error.endpoint = endpoint_without_query(task_url)
+    raise error
 
 
 def save_completed_result(
@@ -225,12 +326,60 @@ def save_completed_result(
     request_metadata: dict[str, Any],
     request_timeout: float,
     downloader: ByteDownloader,
+    sleeper: Callable[[float], None] = time.sleep,
+    max_download_attempts: int = 3,
+    retry_backoff_seconds: float = 1.0,
 ) -> dict[str, Any]:
     record = image_record(final_payload)
     if not record:
         raise RuntimeError("Right Code image task completed without an image result")
-    raw_bytes, result_transport = image_bytes_from_record(record, downloader, request_timeout)
-    png_bytes = normalize_png(raw_bytes)
+    result_url = clean_space(record.get("url"))
+    download_endpoint = endpoint_without_query(result_url) if result_url else "inline:base64"
+    try:
+        if result_url:
+            raw_bytes = retry_transient(
+                lambda: downloader(result_url, request_timeout),
+                attempts=max_download_attempts,
+                stage="image_download",
+                endpoint=result_url,
+                task_id=task_id,
+                submission_outcome="accepted" if task_id else "completed_inline",
+                sleeper=sleeper,
+                backoff_seconds=retry_backoff_seconds,
+            )
+            result_transport = "url"
+        else:
+            raw_bytes, result_transport = image_bytes_from_record(record, downloader, request_timeout)
+    except RightCodeStageError:
+        raise
+    except Exception as exc:
+        raise RightCodeStageError(
+            f"Right Code image_download failed: {clean_space(exc)}",
+            stage="image_download",
+            endpoint=download_endpoint,
+            task_id=task_id,
+            submission_outcome="accepted" if task_id else "completed_inline",
+            safe_to_retry=True,
+            recommended_action=(
+                f"Resume task {task_id} with --resume-task-id to download the completed result again."
+                if task_id else "Retry the image download without submitting a new task."
+            ),
+        ) from exc
+    try:
+        png_bytes = normalize_png(raw_bytes)
+    except Exception as exc:
+        raise RightCodeStageError(
+            f"Right Code image_validation failed: {clean_space(exc)}",
+            stage="image_validation",
+            endpoint=download_endpoint,
+            task_id=task_id,
+            submission_outcome="accepted" if task_id else "completed_inline",
+            safe_to_retry=True,
+            recommended_action=(
+                f"Resume task {task_id} with --resume-task-id to fetch the result again."
+                if task_id else "Retry result retrieval without submitting a new task."
+            ),
+        ) from exc
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_name(output_path.name + ".tmp")
     temporary.write_bytes(png_bytes)
@@ -240,6 +389,8 @@ def save_completed_result(
         "provider": "rightcode",
         "model": model,
         "task_id": task_id or None,
+        "submission_outcome": "accepted" if task_id else "completed_inline",
+        "safe_to_retry": False,
         "request": request_metadata,
         "output_path": str(output_path),
         "asset_class": "style_reference_only",
@@ -247,6 +398,10 @@ def save_completed_result(
         "byte_count": len(png_bytes),
         "sha256": hashlib.sha256(png_bytes).hexdigest(),
         "included_in_final_svg": False,
+        "endpoints": {
+            "status": request_metadata.get("status_endpoint"),
+            "download": download_endpoint,
+        },
     }
 
 
@@ -283,12 +438,34 @@ def generate_style_reference(
         request_payload["imageSize"] = image_size
     elif image_size != "1K":
         raise ValueError(f"{model} does not advertise {image_size}; use 1K or an image-size-capable model")
-    submitted = requester("POST", submit_url, api_key, request_payload, request_timeout)
+    try:
+        submitted = requester("POST", submit_url, api_key, request_payload, request_timeout)
+    except Exception as exc:
+        raise RightCodeStageError(
+            f"Right Code post_submission failed before a task ID was received: {clean_space(exc)}",
+            stage="post_submission",
+            endpoint=endpoint_without_query(submit_url),
+            submission_outcome="unknown",
+            safe_to_retry=False,
+            recommended_action=(
+                "Check the Right Code task or billing dashboard. Resume the existing task if a task ID can be found; "
+                "submit again only after confirming that no task was created."
+            ),
+        ) from exc
     task_id = clean_space(submitted.get("task_id"))
     final_payload = submitted
     if not image_record(final_payload):
         if not task_id:
-            raise RuntimeError(f"Right Code did not return task_id: {api_error_message(submitted)}")
+            raise RightCodeStageError(
+                f"Right Code did not return task_id: {api_error_message(submitted)}",
+                stage="post_submission",
+                endpoint=endpoint_without_query(submit_url),
+                submission_outcome="unknown",
+                safe_to_retry=False,
+                recommended_action=(
+                    "Check the Right Code task or billing dashboard. Submit again only after confirming that no task was created."
+                ),
+            )
         final_payload = poll_for_result(
             task_id,
             task_base_url,
@@ -318,9 +495,15 @@ def generate_style_reference(
             "section_count": layout.get("section_count"),
             "hero_section": layout.get("hero_section"),
             "figure_slot_count": layout.get("figure_slot_count"),
+            "submission_endpoint": endpoint_without_query(submit_url),
+            "status_endpoint": (
+                endpoint_without_query(f"{task_base_url}/tasks/{urllib.parse.quote(task_id, safe='')}")
+                if task_id else None
+            ),
         },
         request_timeout,
         downloader,
+        sleeper=sleeper,
     )
 
 
@@ -357,9 +540,16 @@ def resume_style_reference(
         output_path,
         normalized_task_id,
         model,
-        {"async": True, "resumed": True},
+        {
+            "async": True,
+            "resumed": True,
+            "status_endpoint": endpoint_without_query(
+                f"{task_base_url}/tasks/{urllib.parse.quote(normalized_task_id, safe='')}"
+            ),
+        },
         request_timeout,
         downloader,
+        sleeper=sleeper,
     )
 
 
@@ -470,11 +660,16 @@ def main() -> int:
             "asset_class": "style_reference_only",
             "included_in_final_svg": False,
             "failure": clean_space(exc),
+            "failure_stage": clean_space(getattr(exc, "stage", "unknown")) or "unknown",
+            "endpoint": endpoint_without_query(clean_space(getattr(exc, "endpoint", ""))) or None,
+            "submission_outcome": clean_space(getattr(exc, "submission_outcome", "unknown")) or "unknown",
+            "safe_to_retry": bool(getattr(exc, "safe_to_retry", False)),
+            "recommended_action": clean_space(getattr(exc, "recommended_action", "")),
         }
         failed_task_id = clean_space(args.resume_task_id or getattr(exc, "task_id", ""))
         if failed_task_id:
             metadata["task_id"] = failed_task_id
-            metadata["resumable"] = isinstance(exc, ImageTaskTimeout)
+            metadata["resumable"] = bool(getattr(exc, "safe_to_retry", False))
         write_json(report_path, metadata)
         write_json(brief_path, update_brief(brief, metadata))
         print(f"Right Code image art direction failed: {exc}", file=sys.stderr)

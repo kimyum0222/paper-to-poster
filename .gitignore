@@ -3,4 +3,3 @@ outputs/
 *.pdf
 __pycache__/
 papers/
-scripts/_pycache__/

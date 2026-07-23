@@ -158,13 +158,6 @@ def make_bullets(text: str, max_bullets: int, max_words: int = 18) -> list[str]:
     return bullets
 
 
-def source_record(source_name: str, sentence: str) -> dict[str, str]:
-    return {
-        "source": source_name,
-        "text": clean_space(sentence),
-    }
-
-
 def make_bullets_with_evidence(
     text: str,
     max_bullets: int,
@@ -231,11 +224,6 @@ def sentence_score_for_message(sentence: str) -> int:
             score += weight
     score += min(len(sentence.split()), 28)
     return score
-
-
-def make_take_home_message(*sources: str) -> str:
-    claim, _ = make_take_home_with_evidence(*[(f"source_{index + 1}", source) for index, source in enumerate(sources)])
-    return claim
 
 
 def label_for_result_sentence(sentence: str) -> str:
@@ -312,14 +300,6 @@ def make_result_callouts_with_evidence(*sources: tuple[str, str], limit: int = 3
             break
 
     return callouts, evidence
-
-
-def make_result_callouts(*sources: str, limit: int = 3) -> list[dict[str, str]]:
-    callouts, _ = make_result_callouts_with_evidence(
-        *[(f"source_{index + 1}", source) for index, source in enumerate(sources)],
-        limit=limit,
-    )
-    return callouts
 
 
 def make_section(heading: str, source_text: str, limit: int, source_name: str, max_words: int = 18) -> dict[str, Any]:

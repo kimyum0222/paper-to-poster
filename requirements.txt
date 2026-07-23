@@ -1,0 +1,3 @@
+# Required for deterministic PDF extraction, preview rendering, and font metrics.
+PyMuPDF>=1.24,<2
+Pillow>=10,<12

@@ -78,7 +78,7 @@ For custom compatible endpoints, standard `OPENAI_API_KEY` and `OPENAI_BASE_URL`
 
 When narrative planning and image art direction are both enabled, the visual-brief stage must validate the content hash and selected IDs, then transform this plan into content-aware but text-free layout requirements. It may pass section count, reading order, hero, priority, text density, bullet budget, relative area weight, and blank source-image slot proportions to the image model.
 
-The generated reference remains non-authoritative. Exact text and unchanged source figures stay under deterministic SVG control, and the current pixel-analysis stage does not yet claim to recover authoritative panel geometry from the reference image.
+The generated reference remains non-authoritative. Exact text and unchanged source figures stay under deterministic SVG control. Pixel analysis may recover guarded panel geometry only when the reference hash, expected panel count, confidence, canvas bounds, and non-overlap checks pass; otherwise it must report a degraded result and retain deterministic geometry.
 
 ## Acceptance Checks
 

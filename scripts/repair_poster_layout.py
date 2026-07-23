@@ -51,6 +51,12 @@ def repair_design(design: dict[str, Any], overflow: dict[str, Any], iteration: i
     grid = ensure_dict(design, "grid")
     image_placement = ensure_dict(design, "image_placement")
     callout_style = ensure_dict(design, "callout_style")
+    explicit_sections = design.get("sections") if isinstance(design.get("sections"), list) else []
+    sections_by_id = {
+        str(section.get("section_id", "")).replace("-", "_"): section
+        for section in explicit_sections
+        if isinstance(section, dict) and section.get("section_id")
+    }
 
     actions: list[dict[str, Any]] = []
 
@@ -86,9 +92,14 @@ def repair_design(design: dict[str, Any], overflow: dict[str, Any], iteration: i
 
         if target == "header":
             if "bottom" in sides or "top" in sides:
-                old_header = float(grid.get("header_height", 116) or 116)
-                grid["header_height"] = clamp(old_header + 12, 96, 160)
-                add_action(target, problem, "increased header height")
+                if explicit_sections:
+                    old_title = float(typography.get("title", 34) or 34)
+                    typography["title"] = clamp(old_title - 1.5, 25, 38)
+                    add_action(target, problem, "reduced title size while preserving explicit section coordinates")
+                else:
+                    old_header = float(grid.get("header_height", 116) or 116)
+                    grid["header_height"] = clamp(old_header + 12, 96, 160)
+                    add_action(target, problem, "increased header height")
             if "right" in sides or "left" in sides:
                 old_title = float(typography.get("title", 34) or 34)
                 typography["title"] = clamp(old_title - 1.5, 25, 38)
@@ -97,12 +108,24 @@ def repair_design(design: dict[str, Any], overflow: dict[str, Any], iteration: i
             typography["authors"] = clamp(old_authors - 0.4, 9.5, 13)
             continue
 
-        if target in {"key-figure", "primary-figure", "secondary-figure"} or "caption" in str(raw_item.get("text", "")).lower():
+        if target in {"key-figure", "primary-figure", "secondary-figure"} or target.startswith("figure-slot-") or "caption" in str(raw_item.get("text", "")).lower():
             old_caption = float(typography.get("caption", 8.2) or 8.2)
             typography["caption"] = clamp(old_caption - 0.4, 6.8, 9.0)
             old_lines = int(image_placement.get("caption_lines", 3) or 3)
             image_placement["caption_lines"] = min(5, old_lines + 1)
             add_action(target, problem, "reduced caption font size and allowed more caption lines")
+            continue
+
+        normalized_target = target.replace("-", "_")
+        if normalized_target in sections_by_id:
+            section = sections_by_id[normalized_target]
+            body_style = ensure_dict(section, "body_style")
+            old_body = float(body_style.get("font_size", typography.get("body", 10.8)) or 10.8)
+            body_style["font_size"] = clamp(old_body - (0.5 if "bottom" in sides or "top" in sides else 0.35), 8.8, 12.0)
+            old_line = float(body_style.get("line_height_ratio", typography.get("line_height_ratio", 1.34)) or 1.34)
+            if "bottom" in sides or "top" in sides:
+                body_style["line_height_ratio"] = clamp(old_line - 0.03, 1.18, 1.5)
+            add_action(target, problem, "reduced the explicit section body size without changing verified text or geometry")
             continue
 
         if target in {"problem", "core_idea", "method", "results", "contribution", "conclusion"}:

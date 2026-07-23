@@ -375,11 +375,11 @@ def layout_prompt(layout: dict[str, Any] | None) -> str:
     )
 
 
-def style_prompt(title: str, paper_type: str, layout: dict[str, Any] | None = None) -> str:
+def style_prompt(title: str, paper_type: str, layout: dict[str, Any] | None = None, aspect_ratio: str = "4:3") -> str:
     topic = visual_topic_phrase(title)
     structure = layout_prompt(layout)
     return clean_space(f"""
-        Create a 16:9 content-aware but text-free layout reference for an A0
+        Create a {aspect_ratio} content-aware but text-free layout reference for an A0
         landscape academic research poster about {topic}. This is visual art
         direction only, not the final poster. {structure} Use a deep indigo
         header band, quiet blue-gray
@@ -404,9 +404,12 @@ def build_visual_brief(
     style_reference_path: str = "outputs/poster_style_reference.png",
     narrative_plan: dict[str, Any] | None = None,
     narrative_plan_path: str | None = None,
+    aspect_ratio: str = "4:3",
 ) -> dict[str, Any]:
     title = clean_space(content.get("title")) or "Untitled academic paper"
     layout = validate_narrative_layout(content, narrative_plan) if narrative_plan is not None else None
+    if layout is not None:
+        layout["canvas_aspect_ratio"] = aspect_ratio
     paper_type = clean_space(layout.get("paper_type")) if layout else infer_paper_type(content)
     figures = source_asset_roles(content, layout)
     result_callouts = content.get("result_callouts", [])
@@ -429,7 +432,7 @@ def build_visual_brief(
         "layout_requirements": layout or {
             "source": "content_heuristic_fallback",
             "validated": False,
-            "canvas_aspect_ratio": "16:9",
+            "canvas_aspect_ratio": aspect_ratio,
             "preferred_column_count": 3,
         },
         "hierarchy": {
@@ -464,7 +467,7 @@ def build_visual_brief(
             "contrast_requirement": "dark-on-light body text and white-on-indigo header text",
         },
         "composition_direction": {
-            "canvas": "16:9 landscape reference corresponding to A0 landscape",
+            "canvas": f"{aspect_ratio} landscape reference corresponding closely to A0 landscape",
             "grid": (
                 f"prefer {layout.get('preferred_column_count')} columns while preserving the planned reading order"
                 if layout else "three columns with a full-width header and restrained footer"
@@ -493,7 +496,7 @@ def build_visual_brief(
                 "shadow_opacity": 0.16,
             },
         },
-        "prompt": style_prompt(title, paper_type, layout),
+        "prompt": style_prompt(title, paper_type, layout, aspect_ratio),
         "failure_or_fallback_notes": [],
     }
 
@@ -505,6 +508,7 @@ def main() -> int:
     parser.add_argument("--output-json", default="outputs/poster_visual_brief.json")
     parser.add_argument("--style-reference-path", default="outputs/poster_style_reference.png")
     parser.add_argument("--model", default=os.environ.get("RIGHTCODE_IMAGE_MODEL", "gpt-image-2"))
+    parser.add_argument("--aspect-ratio", choices=["1:1", "16:9", "9:16", "4:3"], default="4:3")
     args = parser.parse_args()
 
     try:
@@ -516,6 +520,7 @@ def main() -> int:
             args.style_reference_path,
             narrative_plan,
             args.narrative_plan_json,
+            args.aspect_ratio,
         )
         write_json(Path(args.output_json), brief)
     except ValueError as exc:

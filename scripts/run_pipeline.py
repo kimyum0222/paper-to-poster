@@ -3,11 +3,136 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+MANAGED_OUTPUT_FILES = {
+    "raw_pdf_extraction.json",
+    "extracted_paper.json",
+    "extraction_verification.json",
+    "poster_content.json",
+    "poster_narrative_plan.json",
+    "poster_design_spec.json",
+    "poster_layout.json",
+    "poster_overflow_report.json",
+    "layout_repair_report.json",
+    "poster_faithfulness_report.json",
+    "poster_aesthetic_report.json",
+    "poster_visual_brief.json",
+    "poster_visual_generation.json",
+    "poster_style_analysis.json",
+    "poster_reference_vision_analysis.json",
+    "poster_style_reference.png",
+    "poster_decorative_vectors.json",
+    "poster_typesetting_manifest.json",
+    "poster_style_conformance_report.json",
+    "poster_visual_fidelity_report.json",
+    "poster_render_preview.png",
+    "poster_diagnostic_preview.png",
+    "poster_visual_review.json",
+    "poster_visual_repair_report.json",
+    "poster_design_spec.visual-candidate.json",
+    "poster_typesetting_manifest.visual-candidate.json",
+    "poster.visual-candidate.svg",
+    "poster_layout.visual-candidate.json",
+    "poster_overflow_report.visual-candidate.json",
+    "poster_render_preview.visual-candidate.png",
+    "poster.svg",
+    "generation_report.md",
+    "run_manifest.json",
+}
+
+
+def script_path(name: str) -> str:
+    return str(SCRIPT_DIR / name)
+
+
+def command_has_script(command: Any, name: str) -> bool:
+    return isinstance(command, list) and any(Path(str(part)).name == name for part in command)
+
+
+def command_references_file(command: Any, name: str) -> bool:
+    return isinstance(command, list) and any(Path(str(part)).name == name for part in command)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def prepare_output_directory(outputs_dir: Path, pdf_path: Path, fresh_output: bool) -> dict[str, Any]:
+    if not pdf_path.is_file():
+        raise ValueError(f"Paper PDF does not exist: {pdf_path}")
+    source_sha256 = sha256_file(pdf_path)
+    if fresh_output and outputs_dir.exists():
+        for name in MANAGED_OUTPUT_FILES:
+            target = outputs_dir / name
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+        assets = outputs_dir / "assets"
+        if assets.exists():
+            shutil.rmtree(assets)
+    elif outputs_dir.exists():
+        previous = read_json(outputs_dir / "run_manifest.json")
+        if not previous:
+            previous = read_json(outputs_dir / "raw_pdf_extraction.json")
+        previous_sha256 = str(
+            previous.get("source_pdf_sha256") or previous.get("source_sha256") or ""
+        ).strip().lower()
+        if previous_sha256 and previous_sha256 != source_sha256:
+            raise ValueError(
+                "Output directory belongs to a different paper; use --fresh-output or a different --outputs-dir"
+            )
+        if not previous_sha256 and any((outputs_dir / name).exists() for name in MANAGED_OUTPUT_FILES):
+            raise ValueError(
+                "Output directory contains an unidentifiable prior run; use --fresh-output or a different --outputs-dir"
+            )
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "version": 1,
+        "status": "running",
+        "source_pdf": str(pdf_path.resolve()),
+        "source_pdf_sha256": source_sha256,
+        "outputs_dir": str(outputs_dir.resolve()),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "fresh_output": fresh_output,
+    }
+    write_json(outputs_dir / "run_manifest.json", manifest)
+    return manifest
+
+
+def finish_run_manifest(
+    outputs_dir: Path,
+    status: str,
+    step_results: list[dict[str, Any]],
+    failed_step: list[str] | None,
+) -> None:
+    manifest = read_json(outputs_dir / "run_manifest.json")
+    if not manifest:
+        return
+    manifest.update({
+        "status": status,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "step_count": len(step_results),
+        "failed_step": failed_step,
+    })
+    write_json(outputs_dir / "run_manifest.json", manifest)
 
 
 def run_step(command: list[str]) -> dict[str, Any]:
@@ -84,36 +209,67 @@ def write_generation_report(
     step_results: list[dict[str, Any]],
     failed_step: list[str] | None = None,
 ) -> None:
-    raw_extraction = read_json(outputs_dir / "raw_pdf_extraction.json")
-    extracted = read_json(outputs_dir / "extracted_paper.json")
-    extraction_verification = read_json(outputs_dir / "extraction_verification.json")
-    content = read_json(outputs_dir / "poster_content.json")
-    layout = read_json(outputs_dir / "poster_layout.json")
-    overflow_report = read_json(outputs_dir / "poster_overflow_report.json")
-    faithfulness_report = read_json(outputs_dir / "poster_faithfulness_report.json")
-    repair_report = read_json(outputs_dir / "layout_repair_report.json")
-    aesthetic_report = read_json(outputs_dir / "poster_aesthetic_report.json")
+    def attempted(script_name: str) -> bool:
+        return any(
+            command_has_script(result.get("command"), script_name)
+            for result in step_results
+        )
+
+    def completed(script_name: str) -> bool:
+        return any(
+            result.get("returncode") == 0 and command_has_script(result.get("command"), script_name)
+            for result in step_results
+        )
+
+    raw_extraction = read_json(outputs_dir / "raw_pdf_extraction.json") if attempted("extract_paper.py") else {}
+    extracted = read_json(outputs_dir / "extracted_paper.json") if attempted("structure_paper_with_openai.py") else {}
+    extraction_verification = read_json(outputs_dir / "extraction_verification.json") if attempted("verify_paper_extraction.py") else {}
+    content = read_json(outputs_dir / "poster_content.json") if attempted("build_poster_content.py") else {}
+    design = read_json(outputs_dir / "poster_design_spec.json") if attempted("build_poster_design.py") else {}
+    layout = read_json(outputs_dir / "poster_layout.json") if attempted("build_poster_svg.py") else {}
+    overflow_report = read_json(outputs_dir / "poster_overflow_report.json") if attempted("validate_svg.py") else {}
+    run_manifest = read_json(outputs_dir / "run_manifest.json")
+
+    faithfulness_completed = completed("review_poster_faithfulness_with_openai.py")
+    repair_completed = completed("repair_poster_layout.py")
+    aesthetic_completed = completed("review_poster_aesthetics_with_openai.py")
+    typesetting_completed = completed("build_typesetting_manifest.py")
+    render_completed = completed("render_svg_preview.py")
+    conformance_completed = completed("check_poster_style_conformance.py")
+    reference_vision_completed = completed("analyze_reference_with_vision.py")
+    preview_vision_completed = completed("review_rendered_poster_with_vision.py")
+    visual_repair_completed = completed("apply_visual_review_repairs.py")
+    faithfulness_report = read_json(outputs_dir / "poster_faithfulness_report.json") if faithfulness_completed else {}
+    repair_report = read_json(outputs_dir / "layout_repair_report.json") if repair_completed else {}
+    aesthetic_report = read_json(outputs_dir / "poster_aesthetic_report.json") if aesthetic_completed else {}
+    typesetting_manifest = read_json(outputs_dir / "poster_typesetting_manifest.json") if typesetting_completed else {}
+    style_conformance_report = read_json(outputs_dir / "poster_style_conformance_report.json") if conformance_completed else {}
+    reference_vision_report = read_json(outputs_dir / "poster_reference_vision_analysis.json") if reference_vision_completed else {}
+    preview_vision_report = read_json(outputs_dir / "poster_visual_review.json") if preview_vision_completed else {}
+    visual_repair_report = read_json(outputs_dir / "poster_visual_repair_report.json") if visual_repair_completed else {}
     narrative_results = [
         result for result in step_results
-        if isinstance(result.get("command"), list)
-        and "scripts/plan_poster_narrative_with_openai.py" in result.get("command", [])
+        if command_has_script(result.get("command"), "plan_poster_narrative_with_openai.py")
     ]
     narrative_requested = bool(narrative_results)
     narrative_completed = any(result.get("returncode") == 0 for result in narrative_results)
     narrative_plan = read_json(outputs_dir / "poster_narrative_plan.json") if narrative_completed else {}
     visual_requested = any(
-        "scripts/build_poster_visual_brief.py" in result.get("command", [])
+        command_has_script(result.get("command"), "build_poster_visual_brief.py")
         for result in step_results
-        if isinstance(result.get("command"), list)
     )
     visual_analyzed = any(
-        "scripts/analyze_poster_style_reference.py" in result.get("command", [])
+        command_has_script(result.get("command"), "analyze_poster_style_reference.py")
         for result in step_results
-        if isinstance(result.get("command"), list)
+    )
+    vectorization_requested = any(
+        command_has_script(result.get("command"), "vectorize_reference_decorations.py")
+        for result in step_results
     )
     visual_brief = read_json(outputs_dir / "poster_visual_brief.json") if visual_requested else {}
     visual_generation = read_json(outputs_dir / "poster_visual_generation.json") if visual_requested else {}
     visual_analysis = read_json(outputs_dir / "poster_style_analysis.json") if visual_analyzed else {}
+    decorative_vectors = read_json(outputs_dir / "poster_decorative_vectors.json") if vectorization_requested else {}
 
     generated_files = [
         "poster.svg",
@@ -124,11 +280,17 @@ def write_generation_report(
         "poster_design_spec.json",
         "poster_layout.json",
         "poster_overflow_report.json",
-        "poster_faithfulness_report.json",
-        "layout_repair_report.json",
-        "poster_aesthetic_report.json",
+        "run_manifest.json",
         "generation_report.md",
     ]
+    if faithfulness_completed:
+        generated_files.append("poster_faithfulness_report.json")
+    if repair_completed:
+        generated_files.append("layout_repair_report.json")
+    if aesthetic_completed:
+        generated_files.append("poster_aesthetic_report.json")
+    if typesetting_completed:
+        generated_files.append("poster_typesetting_manifest.json")
     if narrative_completed:
         generated_files.append("poster_narrative_plan.json")
     if visual_requested:
@@ -140,6 +302,18 @@ def write_generation_report(
             generated_files.append("poster_style_analysis.json")
         if visual_generation.get("status") == "generated":
             generated_files.append("poster_style_reference.png")
+        if render_completed:
+            generated_files.append("poster_render_preview.png")
+        if conformance_completed:
+            generated_files.append("poster_style_conformance_report.json")
+        if reference_vision_completed:
+            generated_files.append("poster_reference_vision_analysis.json")
+        if preview_vision_completed:
+            generated_files.append("poster_visual_review.json")
+        if visual_repair_completed:
+            generated_files.append("poster_visual_repair_report.json")
+        if vectorization_requested:
+            generated_files.append("poster_decorative_vectors.json")
     existing_files = [name for name in generated_files if (outputs_dir / name).exists()]
     if "generation_report.md" not in existing_files:
         existing_files.append("generation_report.md")
@@ -163,7 +337,7 @@ def write_generation_report(
     validation_status = "skipped"
     for result in step_results:
         command = result.get("command", [])
-        if isinstance(command, list) and "scripts/validate_svg.py" in command:
+        if command_has_script(command, "validate_svg.py") and command_references_file(command, "poster.svg"):
             validation_status = "passed" if result.get("returncode") == 0 else "failed"
 
     report = [
@@ -172,6 +346,7 @@ def write_generation_report(
         "## Source",
         "",
         f"- PDF: `{pdf_path}`",
+        f"- Source SHA-256: `{run_manifest.get('source_pdf_sha256', raw_extraction.get('source_pdf_sha256', 'unknown'))}`",
         f"- Output directory: `{outputs_dir}`",
         "",
         "## Generated Files",
@@ -222,7 +397,11 @@ def write_generation_report(
             f"- Selected verified claims: {claim_summary.get('selected_verified_claim_count', 0)} of {claim_summary.get('available_verified_claim_count', 0)}",
             f"- Core source figures: {', '.join(narrative_plan.get('core_figure_ids', []) or []) or 'none'}",
             f"- Consumed by Visual Brief: {bool((visual_brief.get('narrative_plan_linkage') or {}).get('consumed'))}",
-            "- The plan can constrain the text-free image reference; final SVG geometry still remains deterministic.",
+            (
+                "- The plan constrains the text-free image reference and supplies verified IDs to guarded deterministic SVG geometry."
+                if (visual_brief.get("narrative_plan_linkage") or {}).get("consumed")
+                else "- Image art direction linkage was not used; the final SVG retained the deterministic fallback template."
+            ),
         ])
 
     omitted = content.get("omitted_sections", [])
@@ -231,14 +410,24 @@ def write_generation_report(
         "## Layout And Assets",
         "",
         f"- Template: {layout.get('template', 'unknown')}",
+        f"- Layout source: {layout.get('layout_source', 'deterministic_template')}",
         f"- Template rationale: {layout.get('template_rationale', '') or 'not recorded'}",
         f"- Canvas: {layout.get('canvas_width', 1189)} x {layout.get('canvas_height', 841)}",
         f"- Asset embedding mode: {layout.get('asset_embedding_mode', 'unknown')}",
+        f"- Included source-evidence assets: {len(layout.get('source_assets', []) or [])}",
+        f"- Source assets with SHA-256 records: {sum(1 for asset in (layout.get('source_assets', []) or []) if isinstance(asset, dict) and asset.get('sha256'))}",
+        f"- Declared decorative assets: {len(layout.get('decorative_assets', []) or [])}",
+        f"- VTracer-inline decorative assets: {sum(1 for asset in (layout.get('decorative_assets', []) or []) if isinstance(asset, dict) and asset.get('render_mode') == 'vtracer_inline')}",
         "- SVG images are embedded as data URIs when local assets can be read.",
+        "- Generated decorative vectors carry no scientific meaning; source figures remain separate evidence assets.",
     ])
     if visual_requested:
         visual_linkage = visual_brief.get("narrative_plan_linkage") or {}
         layout_requirements = visual_brief.get("layout_requirements") or {}
+        spatial_design = visual_analysis.get("spatial_design") or {}
+        measurements = spatial_design.get("measurements") or {}
+        panel_detection = measurements.get("panel_detection") or {}
+        vector_backend = decorative_vectors.get("backend") if isinstance(decorative_vectors.get("backend"), dict) else {}
         report.extend([
             "",
             "## Image-Model Art Direction",
@@ -254,15 +443,43 @@ def write_generation_report(
             f"- Planned source-image slots: {layout_requirements.get('figure_slot_count', 'not constrained')}",
             f"- Provider task ID: {visual_generation.get('task_id', 'not recorded')}",
             f"- Existing task resumable: {visual_generation.get('resumable', False)}",
+            f"- Submission outcome: {visual_generation.get('submission_outcome', 'not recorded')}",
+            f"- Failure stage: {visual_generation.get('failure_stage', 'none')}",
+            f"- Endpoint: {visual_generation.get('endpoint') or (visual_generation.get('request') or {}).get('submission_endpoint') or 'not recorded'}",
+            f"- Safe to retry current operation: {visual_generation.get('safe_to_retry', False)}",
             f"- Generated asset class: {visual_generation.get('asset_class', 'style_reference_only')}",
             f"- Style reference included in final SVG: {visual_generation.get('included_in_final_svg', False)}",
             f"- Reference-pixel analysis: {visual_analysis.get('status', 'not run')}",
             f"- Analysis method: {visual_analysis.get('method', 'not run')}",
             f"- Derived design tokens applied: {visual_analysis.get('status') == 'passed'}",
+            f"- Multimodal reference analysis: {reference_vision_report.get('status', 'not requested')}",
+            f"- Multimodal reference model: {reference_vision_report.get('model', 'not used')}",
+            f"- Style reference sent to multimodal provider: {reference_vision_report.get('provider_received_style_reference', False)}",
+            f"- Multimodal design semantics applied: {bool((design.get('visual_semantics') or {}).get('applied_to_design'))}",
+            f"- Spatial design status: {spatial_design.get('status', 'not run')}",
+            f"- Detected content panels: {panel_detection.get('detected_content_panel_count', 'not run')} / {panel_detection.get('expected_section_count', 'not constrained')}",
+            f"- Detected decorative strips: {panel_detection.get('detected_decorative_strip_count', 'not run')}",
+            f"- Decorative vectorization: {decorative_vectors.get('status', 'not requested')}",
+            f"- VTracer backend: {vector_backend.get('kind', 'not available')}",
+            f"- VTracer version: {vector_backend.get('version', 'not available')}",
+            f"- VTracer assets generated: {decorative_vectors.get('generated_asset_count', 0)} / {decorative_vectors.get('requested_asset_count', 0)}",
+            f"- Decorative-vector fallback: {decorative_vectors.get('fallback') or 'none'}",
+            f"- Spatial geometry applied to SVG: {layout.get('layout_source') == 'reference_pixels_plus_verified_narrative_constraints'}",
+            f"- Style-token conformance check: {style_conformance_report.get('status', 'not run')}",
+            f"- Style-token conformance score: {style_conformance_report.get('overall_score', 'not run')}",
+            f"- Rendered-preview multimodal review: {preview_vision_report.get('status', 'not requested')}",
+            f"- Rendered-preview review model: {preview_vision_report.get('model', 'not used')}",
+            f"- Rendered poster preview sent to multimodal provider: {preview_vision_report.get('provider_received_rendered_preview', False)}",
+            f"- Approved bounded visual patches: {len(preview_vision_report.get('approved_patches', []) or [])}",
+            f"- Visual repair candidate: {visual_repair_report.get('status', 'not requested')}",
+            "- This score checks execution of analyzed tokens; it is not a pixel-similarity score.",
+            "- Multimodal stages retain no visible text and cannot modify scientific content or source figures.",
             "- Scientific text, metrics, and source figures remain under deterministic SVG control.",
         ])
         if visual_generation.get("failure"):
             report.append(f"- Failure/fallback: {visual_generation.get('failure')}")
+        if visual_generation.get("recommended_action"):
+            report.append(f"- Recommended action: {visual_generation.get('recommended_action')}")
         if visual_analysis.get("failure"):
             report.append(f"- Analysis fallback: {visual_analysis.get('failure')}")
     report.extend([
@@ -275,6 +492,31 @@ def write_generation_report(
         report.append(f"- Text overflow check: {overflow_report.get('status', 'unknown')}")
         report.append(f"- Text lines checked: {overflow_report.get('total_text_lines_checked', 0)}")
         report.append(f"- Overflowing text lines: {overflow_report.get('overflow_line_count', 0)}")
+    if typesetting_manifest:
+        measured_sections = typesetting_manifest.get("sections", []) or []
+        measured_entries = sum(
+            len(section.get("entries", []) or [])
+            for section in measured_sections
+            if isinstance(section, dict)
+        )
+        report.append(f"- Typesetting measurement backend: {typesetting_manifest.get('measurement_backend', 'unknown')}")
+        font = typesetting_manifest.get("font") if isinstance(typesetting_manifest.get("font"), dict) else {}
+        report.append(f"- Resolved SVG font: {font.get('resolved_font_family', 'not resolved')}")
+        report.append(f"- Typesetting sections measured: {len(measured_sections)}")
+        report.append(f"- Verified claim entries measured: {measured_entries}")
+    if style_conformance_report and visual_requested:
+        report.append(f"- Style-token conformance: {style_conformance_report.get('status', 'unknown')}")
+        report.append(f"- Style-token conformance scope: {style_conformance_report.get('conformance_scope', 'not recorded')}")
+    if preview_vision_report:
+        final_preview_path = outputs_dir / "poster_render_preview.png"
+        reviewed_hash = str(preview_vision_report.get("preview_sha256", "") or "")
+        final_hash = sha256_file(final_preview_path) if final_preview_path.is_file() else ""
+        report.append(f"- Rendered-preview vision review: {preview_vision_report.get('status', 'unknown')}")
+        report.append(f"- Vision-reviewed preview is final preview: {bool(reviewed_hash and reviewed_hash == final_hash)}")
+        report.append(f"- Vision review retained visible text: {preview_vision_report.get('visible_text_retained', False)}")
+    if visual_repair_report:
+        report.append(f"- Bounded visual repair: {visual_repair_report.get('status', 'unknown')}")
+        report.append(f"- Bounded visual repair actions: {len(visual_repair_report.get('actions', []) or [])}")
     if faithfulness_report:
         report.append(f"- Faithfulness review: {faithfulness_report.get('status', 'unknown')}")
         report.append(f"- Faithfulness claims reviewed: {faithfulness_report.get('review_count', 0)}")
@@ -320,13 +562,24 @@ def write_generation_report(
     report_path = outputs_dir / "generation_report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
+    finish_run_manifest(
+        outputs_dir,
+        "failed" if failed_step else "complete",
+        step_results,
+        failed_step,
+    )
     print(f"Wrote {report_path}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the MVP paper-to-poster pipeline.")
+    parser = argparse.ArgumentParser(description="Run the paper-to-poster pipeline.")
     parser.add_argument("pdf_path", help="Path to one academic paper PDF.")
     parser.add_argument("--outputs-dir", default="outputs")
+    parser.add_argument(
+        "--fresh-output",
+        action="store_true",
+        help="Remove only managed prior-run artifacts from --outputs-dir before starting.",
+    )
     parser.add_argument(
         "--extraction-mode",
         choices=["auto", "model", "local"],
@@ -398,7 +651,7 @@ def main() -> int:
     parser.add_argument(
         "--image-aspect-ratio",
         choices=["1:1", "16:9", "9:16", "4:3"],
-        default="16:9",
+        default="4:3",
         help="Aspect ratio for the non-authoritative style reference.",
     )
     parser.add_argument("--image-size", choices=["1K", "2K", "4K"], default="1K")
@@ -408,13 +661,66 @@ def main() -> int:
         help="Resume an existing Right Code image task instead of submitting a new billable task.",
     )
     parser.add_argument("--image-timeout-seconds", type=float, default=180.0)
+    parser.add_argument(
+        "--image-request-timeout",
+        type=float,
+        default=45.0,
+        help="Timeout for each Right Code POST, GET, or image-download request. POST is never retried automatically.",
+    )
     parser.add_argument("--image-poll-interval", type=float, default=2.0)
+    parser.add_argument(
+        "--reference-vision-analysis",
+        choices=["off", "auto", "required"],
+        default="off",
+        help="Use a multimodal model to classify reference design semantics after local pixel analysis.",
+    )
+    parser.add_argument(
+        "--preview-vision-review",
+        choices=["off", "auto", "required"],
+        default="off",
+        help="Compare the rendered SVG preview with the style reference using a multimodal model.",
+    )
+    parser.add_argument(
+        "--poster-vision-model",
+        default=None,
+        help="OpenAI-compatible multimodal model for reference analysis and rendered-preview review.",
+    )
+    parser.add_argument(
+        "--max-preview-vision-repairs",
+        type=int,
+        default=1,
+        help="Maximum bounded candidate-design repair passes after multimodal preview review (0-3).",
+    )
+    parser.add_argument(
+        "--decorative-vectorization",
+        choices=["off", "auto", "required"],
+        default="auto",
+        help="Use local VTracer only for safely isolated non-scientific reference decorations. auto falls back to deterministic SVG icons.",
+    )
+    parser.add_argument("--vtracer-command", default="vtracer", help="VTracer executable name or path.")
+    parser.add_argument("--decorative-vectorization-timeout", type=float, default=120.0)
     args = parser.parse_args()
     if args.image_resume_task_id and args.image_art_direction == "off":
         parser.error("--image-resume-task-id requires --image-art-direction auto or required")
+    if args.decorative_vectorization == "required" and args.image_art_direction == "off":
+        parser.error("--decorative-vectorization required needs --image-art-direction auto or required")
+    if args.reference_vision_analysis != "off" and args.image_art_direction == "off":
+        parser.error("--reference-vision-analysis requires --image-art-direction auto or required")
+    if args.preview_vision_review != "off" and args.image_art_direction == "off":
+        parser.error("--preview-vision-review requires --image-art-direction auto or required")
+    if args.preview_vision_review != "off" and args.skip_validate:
+        parser.error("--preview-vision-review requires SVG overflow validation; remove --skip-validate")
+    if not 0 <= args.max_preview_vision_repairs <= 3:
+        parser.error("--max-preview-vision-repairs must be between 0 and 3")
 
     python = sys.executable
     outputs_dir = Path(args.outputs_dir)
+    pdf_path = Path(args.pdf_path).expanduser()
+    try:
+        prepare_output_directory(outputs_dir, pdf_path, args.fresh_output)
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.pdf_path = str(pdf_path.resolve())
 
     raw_json = outputs_dir / "raw_pdf_extraction.json"
     extracted_json = outputs_dir / "extracted_paper.json"
@@ -424,10 +730,12 @@ def main() -> int:
     visual_brief_json = outputs_dir / "poster_visual_brief.json"
     visual_generation_json = outputs_dir / "poster_visual_generation.json"
     style_analysis_json = outputs_dir / "poster_style_analysis.json"
+    reference_vision_analysis_json = outputs_dir / "poster_reference_vision_analysis.json"
     style_reference_path = outputs_dir / "poster_style_reference.png"
+    decorative_vectors_json = outputs_dir / "poster_decorative_vectors.json"
     semantic_step = [
         python,
-        "scripts/structure_paper_with_openai.py",
+        script_path("structure_paper_with_openai.py"),
         args.pdf_path,
         "--raw-json",
         str(raw_json),
@@ -446,7 +754,7 @@ def main() -> int:
     steps = [
         [
             python,
-            "scripts/extract_paper.py",
+            script_path("extract_paper.py"),
             args.pdf_path,
             "--outputs-dir",
             str(outputs_dir),
@@ -456,7 +764,7 @@ def main() -> int:
         semantic_step,
         [
             python,
-            "scripts/verify_paper_extraction.py",
+            script_path("verify_paper_extraction.py"),
             "--raw-json",
             str(raw_json),
             "--extracted-json",
@@ -468,7 +776,7 @@ def main() -> int:
     if args.use_vision_review:
         review_step = [
             python,
-            "scripts/review_figures_with_openai.py",
+            script_path("review_figures_with_openai.py"),
             "--input-json",
             str(extracted_json),
             "--output-json",
@@ -481,13 +789,13 @@ def main() -> int:
         steps.append(review_step)
     steps.extend(
         [
-            [python, "scripts/build_poster_content.py", "--input-json", str(extracted_json), "--output-json", str(content_json)],
+            [python, script_path("build_poster_content.py"), "--input-json", str(extracted_json), "--output-json", str(content_json)],
         ]
     )
     if args.use_faithfulness_review:
         faithfulness_step = [
             python,
-            "scripts/review_poster_faithfulness_with_openai.py",
+            script_path("review_poster_faithfulness_with_openai.py"),
             "--content-json",
             str(content_json),
             "--extracted-json",
@@ -501,7 +809,7 @@ def main() -> int:
     if args.narrative_planning != "off":
         narrative_step = [
             python,
-            "scripts/plan_poster_narrative_with_openai.py",
+            script_path("plan_poster_narrative_with_openai.py"),
             "--content-json",
             str(content_json),
             "--extracted-json",
@@ -518,19 +826,21 @@ def main() -> int:
     if args.image_art_direction != "off":
         visual_brief_step = [
             python,
-            "scripts/build_poster_visual_brief.py",
+            script_path("build_poster_visual_brief.py"),
             "--content-json",
             str(content_json),
             "--output-json",
             str(visual_brief_json),
             "--style-reference-path",
             str(style_reference_path),
+            "--aspect-ratio",
+            args.image_aspect_ratio,
         ]
         if args.narrative_planning != "off":
             visual_brief_step.extend(["--narrative-plan-json", str(narrative_plan_json)])
         visual_generation_step = [
             python,
-            "scripts/generate_poster_style_with_rightcode.py",
+            script_path("generate_poster_style_with_rightcode.py"),
             "--brief-json",
             str(visual_brief_json),
             "--output-image",
@@ -545,12 +855,14 @@ def main() -> int:
             args.image_size,
             "--timeout-seconds",
             str(args.image_timeout_seconds),
+            "--request-timeout",
+            str(args.image_request_timeout),
             "--poll-interval",
             str(args.image_poll_interval),
         ]
         visual_analysis_step = [
             python,
-            "scripts/analyze_poster_style_reference.py",
+            script_path("analyze_poster_style_reference.py"),
             "--brief-json",
             str(visual_brief_json),
             "--image",
@@ -560,16 +872,62 @@ def main() -> int:
             "--mode",
             args.image_art_direction,
         ]
+        if args.narrative_planning != "off":
+            visual_analysis_step.extend([
+                "--content-json",
+                str(content_json),
+                "--narrative-plan-json",
+                str(narrative_plan_json),
+            ])
         if args.image_model:
             visual_brief_step.extend(["--model", args.image_model])
             visual_generation_step.extend(["--model", args.image_model])
         if args.image_resume_task_id:
             visual_generation_step.extend(["--resume-task-id", args.image_resume_task_id])
         steps.extend([visual_brief_step, visual_generation_step, visual_analysis_step])
+        if args.reference_vision_analysis != "off":
+            reference_vision_step = [
+                python,
+                script_path("analyze_reference_with_vision.py"),
+                "--reference",
+                str(style_reference_path),
+                "--style-analysis-json",
+                str(style_analysis_json),
+                "--visual-brief-json",
+                str(visual_brief_json),
+                "--narrative-plan-json",
+                str(narrative_plan_json),
+                "--output-json",
+                str(reference_vision_analysis_json),
+                "--mode",
+                args.reference_vision_analysis,
+            ]
+            if args.poster_vision_model:
+                reference_vision_step.extend(["--model", args.poster_vision_model])
+            steps.append(reference_vision_step)
+        if args.decorative_vectorization != "off":
+            steps.append([
+                python,
+                script_path("vectorize_reference_decorations.py"),
+                "--reference",
+                str(style_reference_path),
+                "--analysis-json",
+                str(style_analysis_json),
+                "--output-dir",
+                str(outputs_dir / "assets" / "generated"),
+                "--report-json",
+                str(decorative_vectors_json),
+                "--mode",
+                args.decorative_vectorization,
+                "--command",
+                args.vtracer_command,
+                "--timeout-seconds",
+                str(args.decorative_vectorization_timeout),
+            ])
 
     design_step = [
         python,
-        "scripts/build_poster_design.py",
+        script_path("build_poster_design.py"),
         "--content-json",
         str(content_json),
         "--output-json",
@@ -577,15 +935,18 @@ def main() -> int:
     ]
     if args.image_art_direction != "off":
         design_step.extend(["--visual-brief-json", str(visual_brief_json)])
+        if args.decorative_vectorization != "off":
+            design_step.extend(["--decorative-vectors-json", str(decorative_vectors_json)])
     steps.extend([
         design_step,
-        [python, "scripts/build_poster_svg.py", "--content-json", str(content_json), "--design-json", str(outputs_dir / "poster_design_spec.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
+        [python, script_path("build_typesetting_manifest.py"), "--content-json", str(content_json), "--design-json", str(outputs_dir / "poster_design_spec.json"), "--output-json", str(outputs_dir / "poster_typesetting_manifest.json")],
+        [python, script_path("build_poster_svg.py"), "--content-json", str(content_json), "--design-json", str(outputs_dir / "poster_design_spec.json"), "--typesetting-manifest-json", str(outputs_dir / "poster_typesetting_manifest.json"), "--outputs-dir", str(outputs_dir), "--svg-path", str(outputs_dir / "poster.svg"), "--layout-json", str(outputs_dir / "poster_layout.json")],
     ])
 
-    if not args.skip_validate and Path("scripts/validate_svg.py").exists():
+    if not args.skip_validate and Path(script_path("validate_svg.py")).exists():
         steps.append([
             python,
-            "scripts/validate_svg.py",
+            script_path("validate_svg.py"),
             str(outputs_dir / "poster.svg"),
             "--outputs-dir",
             str(outputs_dir),
@@ -604,7 +965,7 @@ def main() -> int:
             write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=step)
             print(f"Step failed with exit code {code}.", file=sys.stderr)
             return code
-        if "scripts/review_poster_faithfulness_with_openai.py" in step:
+        if command_has_script(step, "review_poster_faithfulness_with_openai.py"):
             faithfulness_report = read_json(outputs_dir / "poster_faithfulness_report.json")
             if report_fails_gate(faithfulness_report, args.faithfulness_gate):
                 gate = quality_gate_result(
@@ -623,7 +984,7 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 3
-        if "scripts/build_poster_content.py" in step:
+        if command_has_script(step, "build_poster_content.py"):
             content = read_json(outputs_dir / "poster_content.json")
             unresolved_claims = unresolved_claims_for_gate(content, args.claim_evidence_gate)
             if unresolved_claims:
@@ -651,7 +1012,7 @@ def main() -> int:
                 break
             repair_step = [
                 python,
-                "scripts/repair_poster_layout.py",
+                script_path("repair_poster_layout.py"),
                 "--design-json",
                 str(outputs_dir / "poster_design_spec.json"),
                 "--overflow-json",
@@ -661,13 +1022,25 @@ def main() -> int:
                 "--iteration",
                 str(iteration),
             ]
-            rerender_step = [
+            remeasure_step = [
                 python,
-                "scripts/build_poster_svg.py",
+                script_path("build_typesetting_manifest.py"),
                 "--content-json",
                 str(outputs_dir / "poster_content.json"),
                 "--design-json",
                 str(outputs_dir / "poster_design_spec.json"),
+                "--output-json",
+                str(outputs_dir / "poster_typesetting_manifest.json"),
+            ]
+            rerender_step = [
+                python,
+                script_path("build_poster_svg.py"),
+                "--content-json",
+                str(outputs_dir / "poster_content.json"),
+                "--design-json",
+                str(outputs_dir / "poster_design_spec.json"),
+                "--typesetting-manifest-json",
+                str(outputs_dir / "poster_typesetting_manifest.json"),
                 "--outputs-dir",
                 str(outputs_dir),
                 "--svg-path",
@@ -677,7 +1050,7 @@ def main() -> int:
             ]
             revalidate_step = [
                 python,
-                "scripts/validate_svg.py",
+                script_path("validate_svg.py"),
                 str(outputs_dir / "poster.svg"),
                 "--outputs-dir",
                 str(outputs_dir),
@@ -686,7 +1059,7 @@ def main() -> int:
                 "--overflow-report",
                 str(outputs_dir / "poster_overflow_report.json"),
             ]
-            for step in [repair_step, rerender_step, revalidate_step]:
+            for step in [repair_step, remeasure_step, rerender_step, revalidate_step]:
                 result = run_step(step)
                 step_results.append(result)
                 code = int(result["returncode"])
@@ -715,10 +1088,209 @@ def main() -> int:
             )
             return 3
 
+    if args.image_art_direction != "off":
+        initial_render_step = [
+            python,
+            script_path("render_svg_preview.py"),
+            str(outputs_dir / "poster.svg"),
+            "--output",
+            str(outputs_dir / "poster_render_preview.png"),
+        ]
+        result = run_step(initial_render_step)
+        step_results.append(result)
+        code = int(result["returncode"])
+        if code != 0:
+            write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=initial_render_step)
+            print(f"Step failed with exit code {code}.", file=sys.stderr)
+            return code
+
+        if args.preview_vision_review != "off":
+            visual_review_json = outputs_dir / "poster_visual_review.json"
+            visual_repair_report_json = outputs_dir / "poster_visual_repair_report.json"
+            candidate_paths = {
+                "design": outputs_dir / "poster_design_spec.visual-candidate.json",
+                "typesetting": outputs_dir / "poster_typesetting_manifest.visual-candidate.json",
+                "svg": outputs_dir / "poster.visual-candidate.svg",
+                "layout": outputs_dir / "poster_layout.visual-candidate.json",
+                "overflow": outputs_dir / "poster_overflow_report.visual-candidate.json",
+                "preview": outputs_dir / "poster_render_preview.visual-candidate.png",
+            }
+
+            def discard_visual_candidate() -> None:
+                for path in candidate_paths.values():
+                    path.unlink(missing_ok=True)
+
+            review_passes = max(1, args.max_preview_vision_repairs)
+            for iteration in range(1, review_passes + 1):
+                visual_review_step = [
+                    python,
+                    script_path("review_rendered_poster_with_vision.py"),
+                    "--reference",
+                    str(style_reference_path),
+                    "--preview",
+                    str(outputs_dir / "poster_render_preview.png"),
+                    "--design-json",
+                    str(outputs_dir / "poster_design_spec.json"),
+                    "--layout-json",
+                    str(outputs_dir / "poster_layout.json"),
+                    "--overflow-json",
+                    str(outputs_dir / "poster_overflow_report.json"),
+                    "--output-json",
+                    str(visual_review_json),
+                    "--mode",
+                    args.preview_vision_review,
+                ]
+                if args.poster_vision_model:
+                    visual_review_step.extend(["--model", args.poster_vision_model])
+                result = run_step(visual_review_step)
+                step_results.append(result)
+                code = int(result["returncode"])
+                if code != 0:
+                    write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=visual_review_step)
+                    print(f"Step failed with exit code {code}.", file=sys.stderr)
+                    return code
+
+                visual_review = read_json(visual_review_json)
+                approved_patches = visual_review.get("approved_patches", [])
+                if (
+                    args.max_preview_vision_repairs == 0
+                    or not isinstance(approved_patches, list)
+                    or not approved_patches
+                ):
+                    break
+
+                discard_visual_candidate()
+                candidate_steps = [
+                    [
+                        python,
+                        script_path("apply_visual_review_repairs.py"),
+                        "--design-json",
+                        str(outputs_dir / "poster_design_spec.json"),
+                        "--review-json",
+                        str(visual_review_json),
+                        "--output-json",
+                        str(candidate_paths["design"]),
+                        "--report-json",
+                        str(visual_repair_report_json),
+                        "--iteration",
+                        str(iteration),
+                    ],
+                    [
+                        python,
+                        script_path("build_typesetting_manifest.py"),
+                        "--content-json",
+                        str(content_json),
+                        "--design-json",
+                        str(candidate_paths["design"]),
+                        "--output-json",
+                        str(candidate_paths["typesetting"]),
+                    ],
+                    [
+                        python,
+                        script_path("build_poster_svg.py"),
+                        "--content-json",
+                        str(content_json),
+                        "--design-json",
+                        str(candidate_paths["design"]),
+                        "--typesetting-manifest-json",
+                        str(candidate_paths["typesetting"]),
+                        "--outputs-dir",
+                        str(outputs_dir),
+                        "--svg-path",
+                        str(candidate_paths["svg"]),
+                        "--layout-json",
+                        str(candidate_paths["layout"]),
+                    ],
+                    [
+                        python,
+                        script_path("validate_svg.py"),
+                        str(candidate_paths["svg"]),
+                        "--outputs-dir",
+                        str(outputs_dir),
+                        "--layout-json",
+                        str(candidate_paths["layout"]),
+                        "--overflow-report",
+                        str(candidate_paths["overflow"]),
+                    ],
+                    [
+                        python,
+                        script_path("render_svg_preview.py"),
+                        str(candidate_paths["svg"]),
+                        "--output",
+                        str(candidate_paths["preview"]),
+                    ],
+                ]
+                candidate_ok = True
+                rejection_reason = ""
+                for candidate_step in candidate_steps:
+                    result = run_step(candidate_step)
+                    step_results.append(result)
+                    if int(result["returncode"]) != 0:
+                        candidate_ok = False
+                        rejection_reason = f"candidate step failed: {Path(candidate_step[1]).name}"
+                        break
+                candidate_overflow = read_json(candidate_paths["overflow"])
+                repair_report = read_json(visual_repair_report_json)
+                if not repair_report.get("actions"):
+                    candidate_ok = False
+                    rejection_reason = rejection_reason or "no allowlisted repair actions were applicable"
+                if candidate_overflow.get("status") != "passed":
+                    candidate_ok = False
+                    rejection_reason = rejection_reason or "candidate SVG did not pass overflow validation"
+
+                if not candidate_ok:
+                    repair_report.update({
+                        "status": "rejected",
+                        "rejection_reason": rejection_reason,
+                        "final_design_unchanged": True,
+                    })
+                    write_json(visual_repair_report_json, repair_report)
+                    discard_visual_candidate()
+                    break
+
+                accepted = {
+                    "design": outputs_dir / "poster_design_spec.json",
+                    "typesetting": outputs_dir / "poster_typesetting_manifest.json",
+                    "svg": outputs_dir / "poster.svg",
+                    "layout": outputs_dir / "poster_layout.json",
+                    "overflow": outputs_dir / "poster_overflow_report.json",
+                    "preview": outputs_dir / "poster_render_preview.png",
+                }
+                for key, candidate_path in candidate_paths.items():
+                    candidate_path.replace(accepted[key])
+                repair_report.update({
+                    "status": "accepted",
+                    "final_design_unchanged": False,
+                    "accepted_preview_sha256": sha256_file(accepted["preview"]),
+                    "accepted_candidate_passed_validation": True,
+                })
+                write_json(visual_repair_report_json, repair_report)
+
+        conformance_step = [
+            python,
+            script_path("check_poster_style_conformance.py"),
+            "--analysis-json",
+            str(outputs_dir / "poster_style_analysis.json"),
+            "--design-json",
+            str(outputs_dir / "poster_design_spec.json"),
+            "--layout-json",
+            str(outputs_dir / "poster_layout.json"),
+            "--output-json",
+            str(outputs_dir / "poster_style_conformance_report.json"),
+        ]
+        for step in [conformance_step]:
+            result = run_step(step)
+            step_results.append(result)
+            code = int(result["returncode"])
+            if code != 0:
+                write_generation_report(outputs_dir, args.pdf_path, step_results, failed_step=step)
+                print(f"Step failed with exit code {code}.", file=sys.stderr)
+                return code
+
     if args.use_aesthetic_review:
         aesthetic_step = [
             python,
-            "scripts/review_poster_aesthetics_with_openai.py",
+            script_path("review_poster_aesthetics_with_openai.py"),
             "--content-json",
             str(outputs_dir / "poster_content.json"),
             "--design-json",
@@ -760,7 +1332,7 @@ def main() -> int:
 
     write_generation_report(outputs_dir, args.pdf_path, step_results)
 
-    print(f"\nDone. Open {outputs_dir / 'poster.svg'} to inspect the MVP poster.")
+    print(f"\nDone. Open {outputs_dir / 'poster.svg'} to inspect the poster.")
     return 0
 
 
